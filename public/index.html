@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>邮汇 · 邮箱工作台</title>
+  <link rel="stylesheet" href="/style-ae0d5ef80203.css">
+  <script src="/app-f95d24a0db17.js" defer></script>
+</head>
+<body>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <section id="authView" class="auth-view hidden">
+    <div class="auth-card">
+      <div class="brand brand-center"><span class="brand-mark">邮</span><span>邮汇</span></div>
+      <div class="auth-art" aria-hidden="true"><div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div><div class="art-envelope"><span></span></div><span class="art-dot dot-one"></span><span class="art-dot dot-two"></span></div>
+      <p class="eyebrow">YOUR EMAIL, IN ONE PLACE</p>
+      <h1 id="authTitle">欢迎使用邮汇</h1>
+      <p id="authCopy" class="muted">连接多个邮箱，用一个清爽的工作台收发邮件。</p>
+      <form id="authForm" class="stack-form">
+        <label id="passwordLabel" for="authPassword">工作台密码</label>
+        <input id="authPassword" type="password" autocomplete="current-password" minlength="12" required placeholder="至少 12 位">
+        <p id="authHint" class="field-hint">密码只用于保护此工作台，不会发送给邮箱服务商。</p>
+        <button id="authSubmit" class="button button-primary full-width" type="submit">解锁工作台</button>
+      </form>
+      <div id="externalLoginOptions" class="external-login-options hidden" aria-label="第三方登录">
+        <div class="auth-or-divider"><span>或使用已绑定身份</span></div>
+        <button class="external-login-button" type="button" data-external-login="google"><span class="external-login-mark google-mark">G</span><span>使用 Google 登录</span></button>
+        <button class="external-login-button" type="button" data-external-login="github"><span class="external-login-mark github-mark">GH</span><span>使用 GitHub 登录</span></button>
+        <button class="external-login-button" type="button" data-external-login="cloudflare"><span class="external-login-mark cloudflare-mark">CF</span><span>使用 Cloudflare Access 登录</span></button>
+      </div>
+      <p class="auth-foot">凭据加密保存在这台应用服务器 · 连接前会验证 IMAP 与 SMTP</p>
+    </div>
+  </section>
+
+  <div id="appView" class="app-shell hidden">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand"><span class="brand-mark">邮</span><span>邮汇</span><span class="brand-tag">MAIL</span></div>
+        <button id="mobileCloseSidebar" class="icon-button sidebar-close" aria-label="关闭侧栏">×</button>
+      </div>
+      <button id="composeButton" class="button compose-button"><span class="compose-plus">＋</span>写邮件</button>
+      <nav class="folder-nav" aria-label="邮件文件夹">
+        <button class="nav-item active" data-folder="INBOX"><span class="nav-icon">▣</span><span>收件箱</span><span id="inboxUnread" class="nav-count"></span></button>
+        <button class="nav-item" data-folder="Starred"><span class="nav-icon">☆</span><span>已加星标</span></button>
+        <button class="nav-item" data-folder="Sent"><span class="nav-icon">↗</span><span>已发送</span></button>
+        <button class="nav-item" data-folder="Drafts"><span class="nav-icon">▤</span><span>草稿</span></button>
+        <button class="nav-item" data-folder="Archive"><span class="nav-icon">▣</span><span>归档</span></button>
+        <button class="nav-item" data-folder="Spam"><span class="nav-icon">!</span><span>垃圾邮件</span></button>
+        <button class="nav-item" data-folder="Trash"><span class="nav-icon">⌫</span><span>已删除</span></button>
+      </nav>
+      <div id="customFolderNav" class="custom-folder-nav"></div>
+      <div class="sidebar-divider"></div>
+      <div class="section-label"><span>邮箱账户</span><button id="addAccountQuick" class="mini-add" aria-label="添加邮箱">＋</button></div>
+      <div id="accountNav" class="account-nav"></div>
+      <div class="sidebar-spacer"></div>
+      <div id="connectionHint" class="connection-hint"><span class="status-dot"></span><span>IMAP / SMTP · TLS 加密</span></div>
+      <button id="manageAccountsButton" class="nav-item settings-item"><span class="nav-icon">⚙</span><span>设置</span></button>
+      <div class="sidebar-bottom"><span class="avatar avatar-small">邮</span><div><strong>私人工作台</strong><small>单用户 · 需密码解锁</small></div><button id="logoutButton" class="icon-button logout-button" title="锁定工作台" aria-label="锁定工作台">↪</button></div>
+    </aside>
+    <div id="sidebarShade" class="sidebar-shade"></div>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button id="mobileMenu" class="icon-button mobile-menu" aria-label="打开菜单">☰</button>
+        <div class="crumb"><span class="crumb-kicker">邮箱</span><span class="crumb-divider">/</span><strong id="currentFolderTitle">收件箱</strong></div>
+        <div class="topbar-actions">
+          <div class="search-box"><span class="search-icon">⌕</span><input id="searchInput" type="search" placeholder="搜索邮件、发件人…" autocomplete="off"><kbd>↵</kbd></div>
+          <button id="refreshButton" class="icon-button refresh-button" title="刷新邮件" aria-label="刷新邮件">⟳</button>
+          <button id="aiToggleButton" class="ai-launcher" type="button" aria-controls="aiChatPanel" aria-expanded="false"><span aria-hidden="true">✦</span><span>AI 助手</span></button>
+          <button id="topAddButton" class="top-add-button"><span>＋</span> 添加邮箱</button>
+        </div>
+      </header>
+
+      <div id="workspace" class="workspace">
+        <section id="listPane" class="list-pane">
+          <div class="list-toolbar">
+            <div class="list-heading"><h1 id="listTitle">收件箱</h1><span id="messageCount" class="count-pill">—</span></div>
+            <div class="list-tools"><select id="accountFilter" aria-label="筛选邮箱"><option value="all">所有邮箱</option></select><button id="sortButton" class="icon-button small-tool" title="按时间排序">↕</button></div>
+          </div>
+          <div id="syncBanner" class="sync-banner hidden"></div>
+          <div id="messageList" class="message-list"></div>
+          <div id="listEmpty" class="empty-state hidden">
+            <div class="empty-art"><div class="empty-paper"><span></span><span></span><span></span></div><span class="empty-spark spark-a">✳</span><span class="empty-spark spark-b">·</span></div>
+            <h2 id="emptyTitle">收件箱很安静</h2><p id="emptyCopy">连接一个邮箱，邮件就会出现在这里。</p><button id="emptyAddButton" class="button button-primary">连接邮箱</button>
+          </div>
+          <div id="listPagination" class="list-pagination hidden"><button id="prevPage" class="button button-quiet">← 较新</button><span id="pageLabel">第 1 页</span><button id="nextPage" class="button button-quiet">较早 →</button></div>
+        </section>
+
+        <section id="detailPane" class="detail-pane empty-detail">
+          <div class="detail-placeholder"><div class="placeholder-icon">✉</div><h2>选一封邮件开始阅读</h2><p>你的邮件会安全地从对应邮箱实时读取。</p></div>
+        </section>
+      </div>
+    </main>
+    <aside id="aiChatPanel" class="ai-chat-panel hidden" aria-label="AI 邮件助手">
+      <div class="ai-chat-header">
+        <div><p class="eyebrow">邮汇 AI</p><h2>邮件助手</h2><small id="aiModelStatus">尚未配置模型 API</small></div>
+        <div class="ai-chat-head-actions"><button id="aiSettingsButton" class="icon-button" type="button" aria-label="打开设置中的 AI 助手分区" title="打开设置">⚙</button><button id="aiCloseButton" class="icon-button" type="button" aria-label="关闭 AI 助手" title="关闭">×</button></div>
+      </div>
+      <p class="ai-privacy-note">只有你发送消息或点击下方功能时，相关邮件内容才会发给你配置的模型 API；普通聊天不自动附上邮件，附件不会发送。</p>
+      <div class="ai-quick-actions">
+        <button id="aiExplainButton" class="button button-quiet" type="button" disabled>解读当前邮件</button>
+        <button id="aiDraftButton" class="button button-quiet" type="button" disabled>起草回复</button>
+        <button id="aiDigestButton" class="button button-quiet" type="button">生成今日摘要</button>
+      </div>
+      <div class="ai-context-row"><button id="aiAttachEmailButton" class="ai-context-button" type="button" disabled>＋ 附上当前邮件</button><span id="aiContextLabel" class="ai-context-label hidden"></span><button id="aiClearContext" class="ai-context-clear hidden" type="button">移除</button></div>
+      <div id="aiChatMessages" class="ai-chat-messages" aria-live="polite" aria-relevant="additions text"></div>
+      <form id="aiChatForm" class="ai-chat-form">
+        <textarea id="aiChatInput" maxlength="6000" rows="3" placeholder="向 AI 助手提问…（Ctrl/⌘ + Enter 发送）"></textarea>
+        <button id="aiSendButton" class="button button-primary" type="submit">发送</button>
+      </form>
+    </aside>
+  </div>
+
+  <dialog id="accountDialog" class="dialog account-dialog">
+    <div class="dialog-header"><div><p class="eyebrow">ACCOUNT CONNECTION</p><h2>连接邮箱</h2></div><button class="icon-button close-dialog" data-close="accountDialog" aria-label="关闭">×</button></div>
+    <p class="dialog-intro">支持 Gmail、Outlook、Yahoo、iCloud、Fastmail、163、QQ、Zoho 和自定义域名邮箱。每个账户都会先测试收信与发信连接。</p>
+    <form id="accountForm" class="account-form">
+      <div class="form-grid">
+        <label class="form-field span-two">选择邮箱服务商<select id="providerPreset" name="provider"><option value="custom">自定义 IMAP / SMTP</option><option value="google">Gmail / Google</option><option value="microsoft">Outlook / Microsoft 365</option><option value="yahoo">Yahoo Mail</option><option value="icloud">iCloud Mail</option><option value="fastmail">Fastmail</option><option value="163">网易 163 邮箱</option><option value="qq">QQ 邮箱</option><option value="zoho">Zoho Mail</option></select><small>选择服务商后，如支持 OAuth 会显示授权入口；也可继续手动连接。</small></label>
+      </div>
+      <div id="oauthChoices" class="oauth-choices hidden">
+        <button id="googleOAuthButton" class="oauth-button hidden" type="button"><span class="oauth-g">G</span><span><strong>使用 Google 授权</strong><small>安全的 OAuth 登录，无需填写邮箱密码</small></span><span class="oauth-arrow">→</span></button>
+        <button id="microsoftOAuthButton" class="oauth-button hidden" type="button"><span class="oauth-ms"><i></i><i></i><i></i><i></i></span><span><strong>使用 Microsoft 授权</strong><small>适用于 Outlook.com 与 Microsoft 365</small></span><span class="oauth-arrow">→</span></button>
+        <div class="or-divider"><span>或使用 IMAP / SMTP 手动连接</span></div>
+      </div>
+      <div class="form-grid">
+        <label class="form-field span-two">显示名称<input name="label" placeholder="例如：个人邮箱"></label>
+        <label class="form-field">邮箱地址<input name="email" type="email" required placeholder="name@example.com" autocomplete="email"></label>
+        <label class="form-field">登录用户名<input name="username" placeholder="通常与邮箱地址相同" autocomplete="username"></label>
+        <label class="form-field span-two">邮箱密码 / 应用专用密码<input name="password" type="password" required autocomplete="new-password" placeholder="只在本机加密保存，不会回显"><small>例如 Gmail、Yahoo、163、QQ 通常需要在邮箱设置中生成应用专用密码。</small></label>
+      </div>
+      <div class="protocol-card">
+        <div class="protocol-title"><span class="protocol-badge">收</span><div><strong>收件服务器</strong><small>IMAP · 接收和同步邮件</small></div></div>
+        <div class="server-grid"><label>服务器<input name="imapHost" required placeholder="imap.example.com"></label><label>端口<input name="imapPort" type="number" min="1" max="65535" value="993" required></label><label class="secure-check"><input name="imapSecure" type="checkbox" checked> 使用 SSL/TLS</label></div>
+      </div>
+      <div class="protocol-card">
+        <div class="protocol-title"><span class="protocol-badge send-badge">发</span><div><strong>发件服务器</strong><small>SMTP · 以此邮箱身份发送</small></div></div>
+        <div class="server-grid"><label>服务器<input name="smtpHost" required placeholder="smtp.example.com"></label><label>端口<input name="smtpPort" type="number" min="1" max="65535" value="465" required></label><label class="secure-check"><input name="smtpSecure" type="checkbox" checked> 使用 SSL/TLS</label></div>
+      </div>
+      <div id="accountFormError" class="form-error hidden"></div>
+      <div class="dialog-footer"><span class="footer-lock">▣ 凭据以 AES-256-GCM 加密存储</span><button id="connectSubmit" class="button button-primary" type="submit"><span>验证并连接</span><span class="button-arrow">→</span></button></div>
+    </form>
+  </dialog>
+
+  <dialog id="settingsDialog" class="dialog settings-dialog settings-unified-dialog">
+    <div class="dialog-header"><div><p class="eyebrow">SETTINGS</p><h2>设置</h2></div><button class="icon-button close-dialog" data-close="settingsDialog" aria-label="关闭">×</button></div>
+    <p class="dialog-intro settings-intro">在同一处管理邮箱账户、OAuth 登录、AI 助手、邮件翻译和新邮件通知。服务密钥由服务器加密保存，不会回传到浏览器。</p>
+    <div class="settings-layout">
+      <nav id="settingsNav" class="settings-nav" aria-label="设置分类" role="tablist">
+        <button id="settingsTabAccounts" class="active" type="button" role="tab" aria-selected="true" aria-controls="settingsPanelAccounts" data-settings-tab="accounts">邮箱账户</button>
+        <button id="settingsTabAI" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelAI" data-settings-tab="ai">AI 助手</button>
+        <button id="settingsTabTranslation" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelTranslation" data-settings-tab="translation">邮件翻译</button>
+        <button id="settingsTabNotifications" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelNotifications" data-settings-tab="notifications">新邮件通知</button>
+        <button id="settingsTabOAuth" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelOAuth" data-settings-tab="oauth">OAuth 登录</button>
+      </nav>
+      <div class="settings-content">
+        <section id="settingsPanelAccounts" class="settings-panel" role="tabpanel" aria-labelledby="settingsTabAccounts" data-settings-panel="accounts">
+          <div class="settings-panel-heading"><h3>邮箱账户</h3><p>查看已连接的账户，或添加、移除邮箱。移除连接不会删除邮箱服务器上的邮件。</p></div>
+          <div id="managedAccounts" class="managed-accounts"></div>
+          <div class="default-mailbox-setting">
+            <label class="form-field" for="defaultMailboxSelect">默认收件箱邮箱<select id="defaultMailboxSelect" aria-label="默认收件箱邮箱"><option value="">所有邮箱（不指定默认邮箱）</option></select><small>刷新工作台或首次进入时，收件箱会优先显示所选邮箱的邮件。</small></label>
+            <div class="default-mailbox-actions"><span id="defaultMailboxStatus" role="status" aria-live="polite"></span><button id="saveDefaultMailbox" class="button button-quiet" type="button">保存默认邮箱</button></div>
+          </div>
+          <div class="security-note"><span>盾</span><div><strong>安全与隐私</strong><p>工作台密码保护此工作台；邮箱凭据以本地生成的密钥加密后保存在应用数据目录中。邮件内容按需从邮箱服务器读取。</p></div></div>
+          <div class="dialog-footer"><button id="settingsAddButton" class="button button-primary">＋ 添加邮箱</button></div>
+        </section>
+        <section id="settingsPanelAI" class="settings-panel hidden" role="tabpanel" aria-labelledby="settingsTabAI" data-settings-panel="ai">
+          <div class="settings-panel-heading"><h3>AI 助手与每日摘要</h3><p>可配置任何提供 OpenAI Chat Completions 兼容接口的 HTTPS 模型服务；留空 API Key 表示保留已保存的 Key。</p></div>
+          <form id="aiSettingsForm" class="ai-settings-form">
+            <label class="form-field">服务商名称<input id="aiProviderName" type="text" required maxlength="80" placeholder="例如 OpenAI 或自定义服务商" autocomplete="organization"><small>名称仅用于工作台显示，不限制服务商选择。</small></label>
+            <label class="form-field">API 根地址<input id="aiBaseUrl" type="url" required maxlength="500" placeholder="https://api.your-provider.com/v1" autocomplete="url"><small>填写兼容接口地址；仅支持 HTTPS 公网地址，请求不会经过 Google OAuth 专用代理。</small></label>
+            <label class="form-field">模型名称<input id="aiModel" type="text" required maxlength="200" placeholder="填写服务商提供的模型 ID" autocomplete="off"></label>
+            <label class="form-field">模型 API Key<input id="aiApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新 Key；留空保留已保存的 Key"></label>
+            <div class="ai-settings-divider"></div>
+            <label class="ai-daily-toggle"><input id="aiDailyEnabled" type="checkbox"><span><strong>启用每日自动摘要</strong><small>默认关闭；启用后，邮件摘录会每天自动发送到上述模型 API，并可能产生 API 费用。</small></span></label>
+            <div class="ai-daily-options">
+              <label class="form-field">摘要范围<select id="aiDailyAccount"><option value="all">所有已连接邮箱</option></select><small>只读最近 24 小时收件箱；最多读取 20 个邮箱、每个邮箱 10 封，合计最多 40 封。附件不会发送，正文会截断。</small></label>
+              <label class="form-field">生成时间（香港时间）<input id="aiDailyTime" type="time" value="08:00"></label>
+            </div>
+            <p class="ai-settings-disclosure">聊天、主动选择的邮件和摘要内容会发送到你填写的模型服务商。对话不会由本应用保存；摘要会加密保存在本应用中，最近 45 天保留。AI 只提供解释和草稿，不会替你发送邮件。</p>
+            <div id="aiSettingsStatus" class="ai-settings-status" role="status" aria-live="polite"></div>
+            <div class="dialog-footer ai-settings-footer"><button id="aiDeleteConfig" class="button button-quiet" type="button">清除 AI 配置</button><div><button id="aiTestConfig" class="button button-quiet" type="button">测试 API</button><button id="aiSaveConfig" class="button button-primary" type="submit">保存设置</button></div></div>
+          </form>
+        </section>
+        <section id="settingsPanelTranslation" class="settings-panel hidden" role="tabpanel" aria-labelledby="settingsTabTranslation" data-settings-panel="translation">
+          <div class="settings-panel-heading"><h3>专用邮件翻译服务</h3><p>选择一个翻译 API；目标语言固定为简体中文，凭据不会显示或回传。</p></div>
+          <form id="translationSettingsForm" class="translation-settings-form">
+            <label class="form-field">翻译服务商<select id="translationProvider"><option value="niutrans">小牛翻译（Niutrans）</option><option value="google">Google Cloud Translation</option><option value="azure">Azure Translator</option></select><small>只会调用当前选中的服务商。留空密钥表示保留已保存的值。</small></label>
+            <div id="translationNiuFields" class="translation-provider-fields" data-translation-provider-fields="niutrans">
+              <h4>小牛翻译凭据</h4>
+              <label class="form-field">App ID<input id="niutransAppId" type="text" maxlength="200" autocomplete="off" placeholder="小牛翻译控制台中的 App ID"></label>
+              <label class="form-field">API Key（apikey）<input id="niutransApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新 Key；留空保留已保存的 Key"></label>
+              <p class="translation-doc-link"><a href="https://niutrans.com/documents/contents/transapi_text_v2#accessMode" target="_blank" rel="noreferrer">小牛翻译 API 文档 ↗</a></p>
+            </div>
+            <div id="translationGoogleFields" class="translation-provider-fields hidden" data-translation-provider-fields="google">
+              <h4>Google Cloud Translation 凭据</h4>
+              <label class="form-field span-two">API Key<input id="googleApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入 Google Cloud Translation API Key"></label>
+              <p class="translation-doc-link"><a href="https://docs.cloud.google.com/translate/docs/reference/rest/v2/translate" target="_blank" rel="noreferrer">Google Translation v2 文档 ↗</a></p>
+            </div>
+            <div id="translationAzureFields" class="translation-provider-fields hidden" data-translation-provider-fields="azure">
+              <h4>Azure Translator 凭据</h4>
+              <label class="form-field">API Key<input id="azureApiKey" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入 Azure Translator Key"></label>
+              <label class="form-field">资源区域（Region）<input id="azureRegion" type="text" maxlength="100" autocomplete="off" placeholder="例如 eastasia"><small>区域或多服务资源必填；Global 资源可留空或填写 global。</small></label>
+              <p class="translation-doc-link"><a href="https://learn.microsoft.com/en-us/azure/ai-services/translator/text-translation/reference/v3/translate" target="_blank" rel="noreferrer">Azure Translator v3 文档 ↗</a></p>
+            </div>
+            <p class="translation-disclosure">只有点击邮件中的“译”时，邮件正文才会发送到所选翻译服务商；附件不会发送，也不会发送邮件。正文最多 12,000 个字符，较长内容会分块翻译。各服务商可能按字符计费，请查看你的服务商账户用量。</p>
+            <div id="translationSettingsStatus" class="translation-settings-status" role="status" aria-live="polite"></div>
+            <div class="dialog-footer translation-settings-footer"><button id="translationDeleteConfig" class="button button-quiet" type="button">清除翻译配置</button><button id="translationSaveConfig" class="button button-primary" type="submit">保存翻译设置</button></div>
+          </form>
+        </section>
+        <section id="settingsPanelNotifications" class="settings-panel hidden" role="tabpanel" aria-labelledby="settingsTabNotifications" data-settings-panel="notifications">
+          <div class="settings-panel-heading"><h3>定时检查与新邮件提醒</h3><p id="notificationScopeNote">检查收件箱中的新邮件；设置默认邮箱后只检查该账户，否则检查全部邮箱。</p></div>
+          <form id="notificationsSettingsForm" class="notification-settings-form">
+            <label class="ai-daily-toggle"><input id="notificationChecksEnabled" type="checkbox"><span><strong>启用定时检查</strong><small>服务器每隔一段时间检查一次收件箱；新账户和首次启动只建立基线，不推送已有邮件。</small></span></label>
+            <label class="form-field">检查间隔<select id="notificationInterval"><option value="120">每 2 分钟</option><option value="300">每 5 分钟</option><option value="600">每 10 分钟</option></select></label>
+            <div class="notification-browser-card">
+              <div><strong>浏览器通知</strong><p id="browserNotificationStatus" role="status" aria-live="polite">尚未检查浏览器通知权限。</p></div>
+              <button id="enableBrowserNotifications" class="button button-quiet" type="button">启用浏览器通知</button>
+            </div>
+            <div class="ai-settings-divider"></div>
+            <label class="ai-daily-toggle"><input id="webhookEnabled" type="checkbox"><span><strong>启用 Webhook 推送</strong><small>每封新邮件单独推送一次；失败最多重试 3 次。保存设置不会发送测试请求。</small></span></label>
+            <label class="form-field">Webhook HTTPS 地址<input id="webhookUrl" type="url" maxlength="2048" autocomplete="url" placeholder="https://hooks.example.com/your-endpoint"><small id="webhookUrlHint">地址会加密保存且不会回显；留空表示保留已保存的地址。仅允许解析到公网的 HTTPS 地址。</small></label>
+            <label class="form-field">可选签名密钥<input id="webhookSecret" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新密钥；留空保留已保存的密钥"><small>如果设置，签名通过 X-Youhui-Signature 请求头发送，验证方法见下方说明。</small></label>
+            <p class="notification-disclosure">浏览器通知仅在浏览器已授予权限且工作台不在前台时显示；前台使用时不会弹系统通知。通知只包含发件人、主题、邮箱账户和时间，不包含正文或附件。仅当新邮件明确提及验证码/校验码等关键词且附近有 4–8 位数字时才显示验证码；验证码会出现在通知和 Webhook 摘要中。</p>
+            <div id="notificationsSettingsStatus" class="notifications-settings-status" role="status" aria-live="polite"></div>
+            <div class="dialog-footer notifications-settings-footer"><button id="clearWebhookConfig" class="button button-quiet" type="button">清除 Webhook 配置</button><div class="notification-footer-actions"><button id="testWebhook" class="button button-quiet" type="button" disabled>测试 Webhook</button><button id="saveNotificationsConfig" class="button button-primary" type="submit">保存通知设置</button></div></div>
+          </form>
+        </section>
+        <section id="settingsPanelOAuth" class="settings-panel hidden" role="tabpanel" aria-labelledby="settingsTabOAuth" data-settings-panel="oauth">
+          <div class="settings-panel-heading"><h3>邮箱授权与第三方登录</h3><p>邮箱 OAuth 用于连接 Gmail / Outlook；第三方登录只用于解锁邮汇。OAuth 客户端密钥会加密保存且不会回显。</p></div>
+          <form id="oauthSettingsForm" class="oauth-settings-form">
+            <div class="oauth-config-card">
+              <h4>邮箱 OAuth 客户端</h4>
+              <p>旧环境中的邮箱 OAuth 客户端会在首次启动时加密迁移；保留当前邮箱连接，未填写的项目不会被清除。</p>
+              <label class="form-field">Google 客户端 ID<input id="mailGoogleClientId" type="text" maxlength="500" autocomplete="off" placeholder="输入新 ID；留空保留已保存值"></label>
+              <label class="form-field">Google 客户端密钥<input id="mailGoogleClientSecret" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新密钥；留空保留已保存值"></label>
+              <div class="oauth-callback-line"><span>Google 邮箱回调 URI</span><code id="mailGoogleCallback">—</code></div>
+              <label class="form-field">Microsoft 客户端 ID<input id="mailMicrosoftClientId" type="text" maxlength="500" autocomplete="off" placeholder="输入新 ID；留空保留已保存值"></label>
+              <label class="form-field">Microsoft 客户端密钥<input id="mailMicrosoftClientSecret" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新密钥；留空保留已保存值"></label>
+              <div class="oauth-callback-line"><span>Microsoft 邮箱回调 URI</span><code id="mailMicrosoftCallback">—</code></div>
+            </div>
+            <div class="oauth-config-card">
+              <h4>工作台登录客户端</h4>
+              <p>首次绑定需先用密码解锁；绑定后，OAuth 身份验证成功即可直接进入工作台，不再要求输入本地密码。未绑定身份不会自动注册或获得访问权。客户端可与邮箱 OAuth 共用，但需登记下列回调 URI。</p>
+              <label class="form-field">Google 登录客户端 ID<input id="loginGoogleClientId" type="text" maxlength="500" autocomplete="off" placeholder="输入新 ID；留空保留已保存值"></label>
+              <label class="form-field">Google 登录客户端密钥<input id="loginGoogleClientSecret" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新密钥；留空保留已保存值"></label>
+              <div class="oauth-callback-line"><span>Google 登录回调 URI</span><code id="loginGoogleCallback">—</code></div>
+              <label class="form-field">GitHub OAuth App Client ID<input id="loginGithubClientId" type="text" maxlength="500" autocomplete="off" placeholder="输入新 ID；留空保留已保存值"></label>
+              <label class="form-field">GitHub OAuth App Client Secret<input id="loginGithubClientSecret" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新密钥；留空保留已保存值"></label>
+              <div class="oauth-callback-line"><span>GitHub 回调 URL</span><code id="loginGithubCallback">—</code></div>
+              <label class="form-field span-two">Cloudflare Access OIDC Configuration endpoint<input id="loginCloudflareConfigurationUrl" type="url" maxlength="1000" autocomplete="url" placeholder="https://&lt;team&gt;.cloudflareaccess.com/cdn-cgi/access/sso/oidc/&lt;client-id&gt;/.well-known/openid-configuration"><small>在 Cloudflare Zero Trust → Access → Applications → SaaS application → OIDC 中复制配置端点；需与下面的 Client ID 对应。</small></label>
+              <label class="form-field">Cloudflare Access Client ID<input id="loginCloudflareClientId" type="text" maxlength="500" autocomplete="off" placeholder="Cloudflare Access 应用 Client ID"></label>
+              <label class="form-field">Cloudflare Access Client Secret<input id="loginCloudflareClientSecret" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新密钥；留空保留已保存值"></label>
+              <div class="oauth-callback-line"><span>Cloudflare Access Redirect URL</span><code id="loginCloudflareCallback">—</code></div>
+            </div>
+            <div class="oauth-config-card identity-binding-card">
+              <h4>已绑定的登录身份</h4>
+              <p>绑定或解除绑定需从已解锁的工作台发起；未绑定或不匹配的身份无法登录。密码解锁始终保留，作为回退方式。</p>
+              <div class="identity-binding-row"><div><strong>Google</strong><span id="identityGoogleStatus">尚未检查</span></div><button class="button button-quiet" type="button" data-bind-identity="google">绑定 Google</button><button class="button button-quiet identity-unbind" type="button" data-unbind-identity="google">解除绑定</button></div>
+              <div class="identity-binding-row"><div><strong>GitHub</strong><span id="identityGithubStatus">尚未检查</span></div><button class="button button-quiet" type="button" data-bind-identity="github">绑定 GitHub</button><button class="button button-quiet identity-unbind" type="button" data-unbind-identity="github">解除绑定</button></div>
+              <div class="identity-binding-row"><div><strong>Cloudflare Access</strong><span id="identityCloudflareStatus">尚未检查</span></div><button class="button button-quiet" type="button" data-bind-identity="cloudflare">绑定 Cloudflare</button><button class="button button-quiet identity-unbind" type="button" data-unbind-identity="cloudflare">解除绑定</button></div>
+            </div>
+            <p class="oauth-disclosure">Google 与 Cloudflare 身份通过服务端校验 ID token 签名、issuer、audience、时效和 nonce；GitHub 绑定稳定用户 ID。Cloudflare Access 应用需将上方回调 URL 加入 Redirect URLs，并配置允许登录的 Access policy。</p>
+            <div id="oauthSettingsStatus" class="oauth-settings-status" role="status" aria-live="polite"></div>
+            <div class="dialog-footer oauth-settings-footer"><span class="oauth-save-note">密钥不回传；留空保留已有值</span><button id="saveOAuthConfig" class="button button-primary" type="submit">保存 OAuth 设置</button></div>
+          </form>
+        </section>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="composeDialog" class="dialog compose-dialog">
+    <form id="composeForm">
+      <div class="compose-header"><div class="compose-title"><span class="compose-title-mark">↗</span><h2 id="composeTitle">新邮件</h2></div><div class="compose-header-actions"><button id="composeMinimize" class="icon-button" type="button" title="最小化">−</button><button class="icon-button close-dialog" data-close="composeDialog" type="button" title="关闭">×</button></div></div>
+      <div class="compose-field"><label for="composeFrom">发件账户</label><select id="composeFrom" required></select></div>
+      <div class="compose-field"><label for="composeTo">收件人</label><input id="composeTo" type="text" required placeholder="name@example.com"></div>
+      <div class="compose-field"><label for="composeCc">抄送</label><input id="composeCc" type="text" placeholder="可选，多个地址用逗号分隔"></div>
+      <div class="compose-field"><label for="composeSubject">主题</label><input id="composeSubject" type="text" placeholder="邮件主题"></div>
+      <textarea id="composeBody" class="compose-body" placeholder="写下你想说的话…"></textarea>
+      <div class="compose-tools"><label class="attach-button" for="composeFiles">＋ 添加附件<input id="composeFiles" type="file" multiple></label><div id="composeFileList" class="compose-file-list"></div><small>最多 10 个文件，合计不超过 18 MB</small></div>
+      <div id="composeError" class="form-error hidden"></div>
+      <div class="compose-footer"><span class="compose-from-note">将从所选邮箱通过 SMTP 发送</span><button id="sendButton" class="button button-primary" type="submit"><span>发送邮件</span><span>↗</span></button></div>
+    </form>
+  </dialog>
+
+  <dialog id="confirmDialog" class="dialog confirm-dialog">
+    <div class="dialog-header"><div><p class="eyebrow">确认操作</p><h2 id="confirmTitle">确认？</h2></div><button class="icon-button close-dialog" data-close="confirmDialog" aria-label="关闭">×</button></div>
+    <p id="confirmCopy" class="dialog-intro"></p><div class="dialog-footer"><button id="confirmCancel" class="button button-quiet">取消</button><button id="confirmAccept" class="button button-danger">确认</button></div>
+  </dialog>
+</body>
+</html>

@@ -1,10 +1,11 @@
 const state = {
   status: null, accounts: [], defaultAccountId: '', folders: [], folder: 'INBOX', accountId: 'all', page: 1, query: '',
-  messages: [], total: 0, selected: null, detail: null, olderFirst: false, busy: false, searchTimer: null,
+  messages: [], total: 0, selected: null, detail: null, olderFirst: false, busy: false, searchTimer: null, mailListRequestId: 0,
   aiConfig: null, translationConfig: null, notificationConfig: null, oauthConfig: null, mcpConfig: null, aiMessages: [], aiContext: null, aiBusy: false
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const mailListCache = window.YouhuiMailListCache.create();
 window.addEventListener('message', (event) => {
   const frame = $('#mailBody .mail-body-frame');
   if (!frame || event.source !== frame.contentWindow || !event.data || typeof event.data !== 'object' || event.data.type !== 'youhui-mail-frame-height') return;
@@ -91,6 +92,8 @@ function formatSize(bytes) {
 }
 function showAuth() {
   clearMcpTokenReveal();
+  state.mailListRequestId += 1;
+  mailListCache.clear();
   stopNotificationPolling();
   stopMcpApprovalPolling();
   stopMailboxStatusPolling();
@@ -229,28 +232,62 @@ function renderEmpty() {
   $('#emptyAddButton').classList.toggle('hidden', hasAccounts);
   empty.classList.remove('hidden'); $('#messageList').innerHTML = '';
 }
+function renderMessageListData(data, source) {
+  const incoming = Array.isArray(data?.messages) ? data.messages : [];
+  state.messages = incoming.map((message) => ({ ...message }));
+  const total = Number(data?.total);
+  state.total = Number.isFinite(total) ? Math.max(0, Math.floor(total)) : state.messages.length;
+  if (source === 'cache') {
+    $('#syncBanner').textContent = '显示上次缓存，正在后台刷新…';
+    $('#syncBanner').classList.remove('hidden');
+  } else if (Array.isArray(data?.errors) && data.errors.length) {
+    $('#syncBanner').textContent = data.errors.map((error) => `${state.accounts.find((account) => account.id === error.accountId)?.email || '邮箱'}：${error.error}`).join(' · ');
+    $('#syncBanner').classList.remove('hidden');
+  } else {
+    $('#syncBanner').classList.add('hidden');
+  }
+  $('#messageCount').textContent = state.total > 99 ? '99+' : String(state.total);
+  $('#inboxUnread').textContent = state.folder === 'INBOX' ? String(incoming.filter((message) => message.unread).length || '') : '';
+  if (state.olderFirst) state.messages.reverse();
+  if (!state.messages.length) renderEmpty();
+  else { $('#listEmpty').classList.add('hidden'); renderMessages(); }
+  const hasPages = state.total > 30 || state.page > 1;
+  $('#listPagination').classList.toggle('hidden', !hasPages);
+  $('#pageLabel').textContent = `第 ${state.page} 页`;
+  $('#prevPage').disabled = state.page <= 1;
+  $('#nextPage').disabled = state.total <= state.page * 30;
+}
 async function loadMessages() {
   if ($('#appView').classList.contains('hidden')) return;
-  const list = $('#messageList'); list.innerHTML = '<div class="loading"><span class="spinner"></span>正在从邮箱服务器读取…</div>';
+  const scope = { accountId:state.accountId, folder:state.folder, page:state.page, query:state.query };
+  const requestId = ++state.mailListRequestId;
+  const list = $('#messageList');
+  let hasCachedList = false;
   $('#listEmpty').classList.add('hidden'); $('#syncBanner').classList.add('hidden');
-  const params = new URLSearchParams({ folder:state.folder, accountId:state.accountId, page:String(state.page), limit:'30' });
+  const params = new URLSearchParams({ folder:scope.folder, accountId:scope.accountId, page:String(scope.page), limit:'30' });
   if (state.query) params.set('q', state.query);
   try {
-    const data = await api(`/api/mail?${params}`); state.messages = data.messages; state.total = data.total;
-    if (data.errors?.length) {
-      $('#syncBanner').textContent = data.errors.map((e) => `${state.accounts.find((a) => a.id === e.accountId)?.email || '邮箱'}：${e.error}`).join(' · ');
-      $('#syncBanner').classList.remove('hidden');
+    const refresh = mailListCache.load(scope, () => api(`/api/mail?${params}`), (data, source) => {
+      if (requestId !== state.mailListRequestId) return;
+      if (source === 'cache') hasCachedList = true;
+      renderMessageListData(data, source);
+    });
+    if (!hasCachedList) {
+      list.innerHTML = '<div class="loading"><span class="spinner"></span>正在从邮箱服务器读取…</div>';
+      $('#listEmpty').classList.add('hidden');
     }
-    $('#messageCount').textContent = data.total > 99 ? '99+' : String(data.total);
-    $('#inboxUnread').textContent = state.folder === 'INBOX' ? String(data.messages.filter((m) => m.unread).length || '') : '';
-    if (state.olderFirst) state.messages.reverse();
-    if (!state.messages.length) { renderEmpty(); }
-    else { $('#listEmpty').classList.add('hidden'); renderMessages(); }
-    const hasPages = data.total > 30 || state.page > 1;
-    $('#listPagination').classList.toggle('hidden', !hasPages);
-    $('#pageLabel').textContent = `第 ${state.page} 页`;
-    $('#prevPage').disabled = state.page <= 1; $('#nextPage').disabled = data.total <= state.page * 30;
-  } catch (error) { list.innerHTML = ''; $('#messageCount').textContent = '—'; $('#listEmpty').classList.remove('hidden'); $('#emptyTitle').textContent = '邮件暂时无法读取'; $('#emptyCopy').textContent = error.message; $('#emptyAddButton').classList.toggle('hidden', state.accounts.length > 0); }
+    await refresh;
+  } catch (error) {
+    if (requestId !== state.mailListRequestId) return;
+    if (hasCachedList) {
+      $('#syncBanner').textContent = `邮件列表暂时无法刷新，继续显示上次缓存：${error.message}`;
+      $('#syncBanner').classList.remove('hidden');
+      return;
+    }
+    state.messages = []; state.total = 0; list.innerHTML = ''; $('#messageCount').textContent = '—';
+    $('#listPagination').classList.add('hidden');
+    $('#listEmpty').classList.remove('hidden'); $('#emptyTitle').textContent = '邮件暂时无法读取'; $('#emptyCopy').textContent = error.message; $('#emptyAddButton').classList.toggle('hidden', state.accounts.length > 0);
+  }
 }
 function renderMessages() {
   const list = $('#messageList');
@@ -551,7 +588,7 @@ async function renderManagedAccounts() {
   $$('[data-remove]',root).forEach(button=>button.addEventListener('click',async()=>{
     const account=state.accounts.find(a=>a.id===button.dataset.remove); if(!account)return;
     if(!await askConfirm('移除此邮箱账户？',`将从邮汇中移除 ${account.email} 的连接凭据。服务器上的邮件不会被删除。`, '移除账户', true))return;
-    try{await api(`/api/accounts/${encodeURIComponent(account.id)}`,{method:'DELETE'});state.accounts=state.accounts.filter(a=>a.id!==account.id);if(state.defaultAccountId===account.id)state.defaultAccountId='';if(state.accountId===account.id)state.accountId=state.defaultAccountId||'all';await renderManagedAccounts();renderDefaultMailbox();updateNotificationScopeNote();renderAccountNav();renderAccountFilter();renderComposeAccounts();await loadFolders();await loadMessages();toast('邮箱连接已移除。');}
+    try{await api(`/api/accounts/${encodeURIComponent(account.id)}`,{method:'DELETE'});mailListCache.clearAccount(account.id);state.accounts=state.accounts.filter(a=>a.id!==account.id);if(state.defaultAccountId===account.id)state.defaultAccountId='';if(state.accountId===account.id)state.accountId=state.defaultAccountId||'all';await renderManagedAccounts();renderDefaultMailbox();updateNotificationScopeNote();renderAccountNav();renderAccountFilter();renderComposeAccounts();await loadFolders();await loadMessages();toast('邮箱连接已移除。');}
     catch(error){toast(error.message,true);}
   }));
 }

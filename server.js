@@ -1279,9 +1279,7 @@ async function connectNotificationIdle(monitor) {
   }
 }
 function reconcileNotificationIdles(config) {
-  const rows = config.enabled ? db.prepare('SELECT id FROM accounts ORDER BY created_at').all() : [];
-  const defaultId = config.enabled ? getDefaultAccountId() : '';
-  const monitored = defaultId ? rows.filter((row) => row.id === defaultId) : rows;
+  const monitored = config.enabled ? db.prepare('SELECT id FROM accounts ORDER BY created_at').all() : [];
   const activeIds = new Set(monitored.map((row) => row.id));
   for (const accountId of notificationIdleMonitors.keys()) if (!activeIds.has(accountId)) stopNotificationIdle(accountId);
   for (const row of monitored) {
@@ -1293,10 +1291,7 @@ function reconcileNotificationIdles(config) {
 }
 async function deliverPendingWebhooks(config) {
   if (config.pushProvider !== 'webhook' || !config.webhookEnabled || !config.webhookUrl) return;
-  const defaultId = getDefaultAccountId();
-  const due = defaultId
-    ? db.prepare(`SELECT id,payload,webhook_attempts FROM notification_events WHERE webhook_pending=1 AND webhook_abandoned=0 AND webhook_next_attempt_at<=? AND account_id=? ORDER BY id LIMIT 5`).all(Date.now(), defaultId)
-    : db.prepare(`SELECT id,payload,webhook_attempts FROM notification_events WHERE webhook_pending=1 AND webhook_abandoned=0 AND webhook_next_attempt_at<=? ORDER BY id LIMIT 5`).all(Date.now());
+  const due = db.prepare(`SELECT id,payload,webhook_attempts FROM notification_events WHERE webhook_pending=1 AND webhook_abandoned=0 AND webhook_next_attempt_at<=? ORDER BY id LIMIT 5`).all(Date.now());
   for (const row of due) {
     let attempt = Number(row.webhook_attempts) + 1;
     try {
@@ -1314,10 +1309,7 @@ async function deliverPendingWebhooks(config) {
 }
 async function deliverPendingWxPusher(config) {
   if (config.pushProvider !== 'wxpusher' || !config.wxpusherEnabled || !config.wxpusherAppToken) return;
-  const defaultId = getDefaultAccountId();
-  const due = defaultId
-    ? db.prepare('SELECT id,payload,wxpusher_attempts FROM notification_events WHERE wxpusher_pending=1 AND wxpusher_abandoned=0 AND wxpusher_next_attempt_at<=? AND account_id=? ORDER BY id LIMIT 5').all(Date.now(), defaultId)
-    : db.prepare('SELECT id,payload,wxpusher_attempts FROM notification_events WHERE wxpusher_pending=1 AND wxpusher_abandoned=0 AND wxpusher_next_attempt_at<=? ORDER BY id LIMIT 5').all(Date.now());
+  const due = db.prepare('SELECT id,payload,wxpusher_attempts FROM notification_events WHERE wxpusher_pending=1 AND wxpusher_abandoned=0 AND wxpusher_next_attempt_at<=? ORDER BY id LIMIT 5').all(Date.now());
   for (const row of due) {
     const attempt = Number(row.wxpusher_attempts) + 1;
     try {
@@ -1338,10 +1330,7 @@ async function deliverPendingFcm(config) {
   if (!config.enabled) return;
   try { if (!readFcmServiceAccount()) return; }
   catch { console.warn('FCM delivery paused because the service-account configuration is invalid.'); return; }
-  const defaultId = getDefaultAccountId();
-  const due = defaultId
-    ? db.prepare(`SELECT id,fcm_attempts FROM notification_events WHERE fcm_pending=1 AND fcm_abandoned=0 AND fcm_next_attempt_at<=? AND account_id=? ORDER BY id LIMIT 5`).all(Date.now(), defaultId)
-    : db.prepare(`SELECT id,fcm_attempts FROM notification_events WHERE fcm_pending=1 AND fcm_abandoned=0 AND fcm_next_attempt_at<=? ORDER BY id LIMIT 5`).all(Date.now());
+  const due = db.prepare(`SELECT id,fcm_attempts FROM notification_events WHERE fcm_pending=1 AND fcm_abandoned=0 AND fcm_next_attempt_at<=? ORDER BY id LIMIT 5`).all(Date.now());
   for (const row of due) {
     const devices = db.prepare(`SELECT d.device_id,d.token_hash,d.token_encrypted FROM push_devices d
       JOIN sessions s ON s.token_hash=d.session_hash WHERE s.expires_at>? ORDER BY d.created_at`).all(Date.now());
@@ -1393,9 +1382,7 @@ function scheduleNotificationSweep(delay = 120_000) {
       if (config.enabled) {
         db.prepare('DELETE FROM notification_events WHERE created_at < ?').run(Date.now() - 7 * 24 * 60 * 60_000);
         const accounts = db.prepare('SELECT * FROM accounts ORDER BY created_at').all().map(mapAccount);
-        const defaultId = getDefaultAccountId();
-        const monitored = defaultId ? accounts.filter((account) => account.id === defaultId) : accounts;
-        for (const account of monitored) {
+        for (const account of accounts) {
           try { await scanAccountForNotifications(account, config); }
           catch (error) { console.warn(`New-mail scan skipped for account ${account.id}: ${safeError(error)}`); }
         }
@@ -1425,9 +1412,6 @@ app.put('/api/preferences/default-account', auth, (req, res) => {
   }
   db.prepare(`INSERT INTO app_preferences (key, value) VALUES ('default_account_id', ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(accountId);
-  if (accountId) db.prepare('UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1 AND account_id<>?').run(accountId);
-  if (accountId) db.prepare('UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1 AND account_id<>?').run(accountId);
-  if (accountId) db.prepare('UPDATE notification_events SET fcm_pending=0,fcm_abandoned=1 WHERE fcm_pending=1 AND account_id<>?').run(accountId);
   scheduleNotificationSweep(0);
   res.json({ defaultAccountId: accountId });
 });
@@ -1567,9 +1551,7 @@ app.get('/api/notifications/events', auth, (req, res) => {
   if (afterValue === undefined) return res.json({ events:[], cursor:maximum, defaultAccountId:getDefaultAccountId() });
   const after = Math.max(0, Math.min(Number.MAX_SAFE_INTEGER, Number.parseInt(String(afterValue), 10) || 0));
   const defaultId = getDefaultAccountId();
-  const rows = defaultId
-    ? db.prepare(`SELECT id,payload FROM notification_events WHERE id>? AND account_id=? AND created_at>? ORDER BY id LIMIT 50`).all(after, defaultId, Date.now()-3*24*60*60_000)
-    : db.prepare(`SELECT id,payload FROM notification_events WHERE id>? AND created_at>? ORDER BY id LIMIT 50`).all(after, Date.now()-3*24*60*60_000);
+  const rows = db.prepare(`SELECT id,payload FROM notification_events WHERE id>? AND created_at>? ORDER BY id LIMIT 50`).all(after, Date.now()-3*24*60*60_000);
   const cursor = rows.length ? Number(rows.at(-1).id) : maximum;
   res.json({ events:rows.map((row) => ({ id:Number(row.id), ...decrypt(row.payload) })), cursor, defaultAccountId:defaultId });
 });
@@ -1809,6 +1791,7 @@ app.post('/api/accounts', auth, async (req, res) => {
 app.delete('/api/accounts/:id', auth, (req, res) => {
   const result = db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
   if (!result.changes) return res.status(404).json({ error: '找不到此邮箱账户。' });
+  stopNotificationIdle(req.params.id);
   db.prepare('DELETE FROM app_preferences WHERE key = ? AND value = ?').run('default_account_id', req.params.id);
   db.prepare('DELETE FROM notification_checkpoints WHERE account_id=?').run(req.params.id);
   db.prepare('DELETE FROM notification_events WHERE account_id=?').run(req.params.id);

@@ -156,3 +156,64 @@
 @media(max-width:600px){.mcp-permission-row{align-items:stretch;flex-direction:column;gap:8px}.mcp-permission-actions{justify-content:flex-end}.managed-account{flex-wrap:wrap}.managed-account .managed-main{flex-basis:calc(100% - 65px)}.managed-account .managed-badge{margin-left:45px}.mcp-approval-banner{justify-content:space-between;gap:7px;font-size:9px}}
 /* WxPusher target lists */
 .notification-settings-form .form-field textarea{width:100%;min-height:72px;padding:9px 10px;border:1px solid #e5ebed;border-radius:8px;background:#fbfcfc;color:#46575d;font:inherit;font-size:10px;line-height:1.55;resize:vertical}.notification-settings-form .form-field textarea::placeholder{color:#b1bbbe}
+
+
+/* Native-style message reading: one scroll surface, legible typography, and resilient email content. */
+.detail-view{width:100%;max-width:960px;padding:30px clamp(24px,4vw,64px) 48px}
+.detail-toolbar{padding-bottom:18px}
+.detail-subject{margin:24px 0 22px;color:#1f3036;font-size:clamp(23px,2vw,28px);font-weight:700;line-height:1.3;letter-spacing:-.035em}
+.sender-meta{gap:13px}
+.sender-meta .sender-avatar{width:42px;height:42px;flex-basis:42px;border-radius:50%}
+.sender-info-main strong{color:#2f4147;font-size:13px;font-weight:650}
+.sender-info-main span{color:#74838a;font-size:12px}
+.sender-detail-line{margin-top:6px;color:#7c898f;font-size:11px;line-height:1.55}
+.detail-date{color:#77858b;font-size:11px;line-height:1.5}
+.detail-divider{margin:22px 0 23px}
+.mail-body{color:#35464c;font-size:15px;line-height:1.8;overflow-wrap:anywhere;word-break:normal}
+.mail-body-content{min-width:0;color:inherit;font:inherit;line-height:inherit;overflow-wrap:anywhere;word-break:normal}
+.mail-body-content>:first-child{margin-top:0!important}
+.mail-body-content>:last-child{margin-bottom:0!important}
+.mail-body-content p{margin:0 0 1em}
+.mail-body-content h1,.mail-body-content h2,.mail-body-content h3,.mail-body-content h4{margin:1.15em 0 .55em;color:#26383e;line-height:1.4;letter-spacing:-.02em}
+.mail-body-content h1{font-size:1.55em}.mail-body-content h2{font-size:1.35em}.mail-body-content h3{font-size:1.15em}.mail-body-content h4{font-size:1.05em}
+.mail-body-content a{color:#147b70;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px;overflow-wrap:anywhere}
+.mail-body-content a:hover{color:#105f57}
+.mail-body-content blockquote{margin:1em 0;padding:.2em 0 .2em 1em;border-left:3px solid #d9e7e3;color:#64747a}
+.mail-body-content ul,.mail-body-content ol{padding-left:1.6em;margin:.65em 0 1em}
+.mail-body-content li{padding-left:.15em;margin:.25em 0}
+.mail-body-content hr{height:1px;margin:1.4em 0;border:0;background:#e7ecec}
+.mail-body-content img{max-width:100%;height:auto;vertical-align:middle;object-fit:contain}
+.mail-table-scroll{max-width:100%;margin:1em 0;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch}
+.mail-body-content table{max-width:100%;border-collapse:collapse;border-spacing:0;color:inherit;font:inherit}
+.mail-body-content td,.mail-body-content th{padding:7px 9px;border:1px solid #e2e9e8;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.mail-body-content th{background:#f5f8f7;color:#40545a;font-weight:650}
+.mail-body-content pre{max-width:100%;margin:1em 0;padding:13px 15px;overflow:auto;border:1px solid #e7eceb;border-radius:9px;background:#f7f9f9;color:#35464c;font:13px/1.65 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;overscroll-behavior-x:contain}
+.mail-body-content code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em;overflow-wrap:anywhere}
+.mail-body-content :not(pre)>code{padding:.12em .35em;border-radius:4px;background:#f1f5f4}
+.mail-body-text{color:#35464c;font-size:15px;line-height:1.85;overflow-wrap:anywhere;white-space:pre-wrap}
+.attachment-link{font-size:11px}
+@media(max-width:800px){.detail-view{padding:22px 24px 38px}.detail-subject{margin:21px 0 18px}.mail-body{font-size:15.5px}.detail-divider{margin:19px 0 21px}}
+@media(max-width:500px){.detail-view{padding:calc(16px + env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) calc(30px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left))}.detail-toolbar{padding-bottom:12px}.detail-subject{margin:20px 0 18px;font-size:23px;line-height:1.32}.sender-meta{gap:10px}.sender-meta .sender-avatar{width:38px;height:38px;flex-basis:38px}.sender-info-main{gap:4px 6px}.sender-info-main strong{font-size:12px}.sender-info-main span{font-size:11px}.sender-detail-line{font-size:10px}.detail-date{max-width:94px;font-size:9px}.mail-body{font-size:16px;line-height:1.8}.mail-body-content td,.mail-body-content th{padding:6px 7px}.mail-body-content pre{font-size:12px;padding:11px}.remote-image-notice{font-size:10px}}
+
+
+/* Mail-client defaults: keep the body prose-first, compact, and distinct from a Markdown article. */
+.mail-body{color:#3c4043;font-family:Arial,"Noto Sans SC",-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;line-height:1.65;overflow-wrap:anywhere;word-break:normal}
+.mail-body-content{font:inherit;line-height:inherit;color:inherit}
+.mail-body-content p{margin:0 0 12px}
+.mail-body-content h1,.mail-body-content h2,.mail-body-content h3,.mail-body-content h4{margin:14px 0 8px;color:#30363a;font-weight:600;line-height:1.45;letter-spacing:normal}
+.mail-body-content h1{font-size:1.25em}.mail-body-content h2{font-size:1.15em}.mail-body-content h3,.mail-body-content h4{font-size:1.05em}
+.mail-body-content a{color:#1a73e8;text-decoration:underline;text-underline-offset:1px}
+.mail-body-content a:hover{color:#1558b0}
+.mail-body-content blockquote{margin:10px 0;padding:0 0 0 12px;border-left:2px solid #dadce0;color:#5f6368}
+.mail-body-content ul,.mail-body-content ol{margin:6px 0 12px;padding-left:24px}
+.mail-body-content li{margin:2px 0;padding-left:0}
+.mail-body-content hr{margin:14px 0;background:#dadce0}
+.mail-table-scroll{margin:0;overflow-x:auto}
+.mail-body-content table{font:inherit}
+.mail-body-content td,.mail-body-content th{padding:6px 8px;border-color:#dadce0}
+.mail-body-content th{background:#f8f9fa;color:#3c4043;font-weight:600}
+.mail-body-content pre{padding:10px 12px;border-color:#dadce0;border-radius:3px;background:#f8f9fa;color:#3c4043;font-size:12px}
+.mail-body-content :not(pre)>code{background:#f1f3f4}
+.mail-body-text{color:#3c4043;font-family:Arial,"Noto Sans SC",-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal}
+@media(max-width:800px){.mail-body{font-size:14px}.mail-body-text{font-size:14px;line-height:1.7}}
+@media(max-width:500px){.mail-body{font-size:15px;line-height:1.7}.mail-body-text{font-size:15px;line-height:1.7}.mail-body-content td,.mail-body-content th{padding:5px 7px}}

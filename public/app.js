@@ -304,18 +304,29 @@ function renderDetail(detail, message) {
   </article>`;
   const body = $('#mailBody', pane);
   if (detail.html) {
-    const iframe = document.createElement('iframe'); iframe.setAttribute('sandbox','allow-popups allow-popups-to-escape-sandbox'); iframe.setAttribute('title','邮件 HTML 内容');
-    const makeDocument = (html) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:14px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#405158;overflow-wrap:anywhere}a{color:#188779}table{max-width:100%;border-collapse:collapse}td,th{padding:5px;border:1px solid #e8eded}img{max-width:100%;height:auto}</style></head><body>${html}</body></html>`;
-    const remoteImageCount = (String(detail.html).match(/\bdata-external-src=/gi) || []).length;
-    iframe.srcdoc = makeDocument(detail.html);
-    if (remoteImageCount) {
+    const content = document.createElement('div'); content.className = 'mail-body-content';
+    // The API returns HTML sanitized by sanitize-html; remote image URLs are kept inert in data-external-src.
+    content.innerHTML = detail.html;
+    content.querySelectorAll('a[href]').forEach((link) => { link.target = '_blank'; link.rel = 'noopener noreferrer'; });
+    content.querySelectorAll('table').forEach((table) => {
+      const scroll = document.createElement('div'); scroll.className = 'mail-table-scroll';
+      table.before(scroll); scroll.append(table);
+    });
+    const remoteImages = [...content.querySelectorAll('img[data-external-src]')];
+    if (remoteImages.length) {
       const notice = document.createElement('div'); notice.className = 'remote-image-notice';
-      const copy = document.createElement('p'); copy.textContent = `此邮件包含 ${remoteImageCount} 张远程图片，默认未加载。加载后，图片来源网站可能获知你的 IP 地址和访问时间。`;
+      const copy = document.createElement('p'); copy.textContent = `此邮件包含 ${remoteImages.length} 张远程图片，默认未加载。加载后，图片来源网站可能获知你的 IP 地址和访问时间。`;
       const load = document.createElement('button'); load.type = 'button'; load.textContent = '加载外部图片';
-      load.addEventListener('click', () => { iframe.srcdoc = makeDocument(String(detail.html).replace(/\bdata-external-src=/gi, 'src=')); notice.remove(); }, { once:true });
+      load.addEventListener('click', () => {
+        remoteImages.forEach((image) => {
+          const source = image.getAttribute('data-external-src') || '';
+          if (/^https?:\/\//i.test(source)) { image.setAttribute('src', source); image.removeAttribute('data-external-src'); }
+        });
+        notice.remove();
+      }, { once:true });
       notice.append(copy, load); body.append(notice);
     }
-    body.append(iframe);
+    body.append(content);
   } else { const pre = document.createElement('div'); pre.className='mail-body-text'; pre.textContent = detail.text || '(此邮件没有可显示的正文。)'; body.append(pre); }
   $$('[data-action]', pane).forEach((button) => button.addEventListener('click', () => handleDetailAction(button.dataset.action, message, detail)));
 }

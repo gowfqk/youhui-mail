@@ -24,6 +24,12 @@ npm start
 
 浏览器访问 `http://localhost:3000`。首次打开会要求创建至少 12 位的工作台密码。随后选择“添加邮箱”，填写账号和服务商要求的应用专用密码；应用会先实际验证 IMAP 收件和 SMTP 发件连接，成功后才保存账户。
 
+## Android 客户端
+
+Android 配套客户端源码位于 [`android/`](android/)，使用 Android Studio 打开该目录即可构建。首次启动地址栏为空，由用户输入自己的邮汇 HTTPS 根地址；客户端不允许明文 HTTP。它以安全 WebView 复用现有响应式工作台，支持邮汇密码登录、附件选择、同源附件下载和 Android 原生 FCM 唤醒通知。FCM 只传通用信号，邮件详情由客户端通过登录会话从邮汇服务器读取。Google 等提供商可能阻止嵌入式 WebView OAuth。
+
+启用 FCM 需要为包名 `com.youhui.mail` 配置 Firebase `google-services.json`（放在 `android/app/`），并在当前邮汇部署中安全设置 FCM 服务账号；不含 Firebase 配置的 APK 可正常使用工作台，但不会启用推送。详细构建、安全边界和服务端配置见 [`android/README.md`](android/README.md)。
+
 ## Docker 镜像
 
 GitHub Actions 会在 `main` 分支或 `v*` 版本标签推送时构建并发布 `ghcr.io/gowfqk/youhui-mail`；Pull Request 只验证构建，不发布镜像。运行时数据库和加密密钥保存在独立的 `/data` 卷中，不会打包进镜像。首次启动时，打开 `http://localhost:3000` 并设置至少 12 位的工作台密码。
@@ -94,6 +100,8 @@ Webhook 只有在用户填写地址、启用并保存后才会发送新邮件通
 手动测试使用相同的 JSON 字段结构，但 `event` 为 `webhook.test`、`eventId` 为 `test-<UUID>`、包含 `test: true`，`account` 和 `sender` 为空，主题为“Webhook 测试通知”；它不会代表真实新邮件。只有用户在设置中点击测试按钮时才会发送。
 
 企业微信群机器人地址（`qyapi.weixin.qq.com/cgi-bin/webhook/send`）会自动改用企业微信的 `text` 消息格式，内容包含邮箱、发件人、主题、时间以及有明确提示时提取的验证码，不包含正文或附件。测试为独立的测试文本；企业微信返回的 `errcode` 必须为 0 才算成功，HTTP 200 并不一定代表推送成功。签名如有配置，仍按实际发送的 JSON 请求体计算。其他地址保持上述通用 JSON 事件格式。测试失败时会尽可能显示 HTTP 状态或企业微信错误码，不回显地址或密钥。
+
+Android 原生推送是独立于浏览器通知和 Webhook 的 FCM 通道。服务器通过 FCM HTTP v1 发送只含 `type=mail.new` 的高优先级唤醒消息，不能携带邮件元数据；客户端再使用邮汇登录 Cookie 从 `/api/notifications/events` 拉取事件，详情只在本机生成通知。锁屏公开预览隐藏邮件内容。启用时需在 Firebase 项目打开 Firebase Cloud Messaging API，并将服务账号 JSON 通过 `FCM_SERVICE_ACCOUNT_JSON` 环境变量或安全挂载文件路径 `GOOGLE_APPLICATION_CREDENTIALS` 提供给服务端；不要将私钥提交到源码或镜像。Android 端还需在 `android/app/` 放置 Firebase 为 `com.youhui.mail` 生成的 `google-services.json`，并授予 Android 通知权限。缺少任一端配置时，FCM 不会工作；完整设置步骤见 [`android/README.md`](android/README.md)。
 
 ## Agent 邮件访问（MCP）
 

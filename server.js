@@ -9,7 +9,7 @@ import https from 'node:https';
 import net from 'node:net';
 import { lookup } from 'node:dns/promises';
 import crypto from 'node:crypto';
-import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +54,10 @@ db.pragma('foreign_keys = ON');
 db.exec(`
   CREATE TABLE IF NOT EXISTS app_config (id INTEGER PRIMARY KEY CHECK (id = 1), password_hash TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS push_devices (
+    device_id TEXT PRIMARY KEY, session_hash TEXT NOT NULL REFERENCES sessions(token_hash) ON DELETE CASCADE,
+    token_hash TEXT NOT NULL UNIQUE, token_encrypted TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY, label TEXT NOT NULL, email TEXT NOT NULL, provider TEXT NOT NULL,
     imap_host TEXT NOT NULL, imap_port INTEGER NOT NULL, imap_secure INTEGER NOT NULL,
@@ -77,6 +81,8 @@ db.exec(`
     message_uid INTEGER NOT NULL, uid_validity TEXT NOT NULL, folder TEXT NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL,
     webhook_pending INTEGER NOT NULL DEFAULT 0, webhook_attempts INTEGER NOT NULL DEFAULT 0,
     webhook_next_attempt_at INTEGER NOT NULL DEFAULT 0, webhook_delivered_at INTEGER, webhook_abandoned INTEGER NOT NULL DEFAULT 0,
+    fcm_pending INTEGER NOT NULL DEFAULT 0, fcm_attempts INTEGER NOT NULL DEFAULT 0,
+    fcm_next_attempt_at INTEGER NOT NULL DEFAULT 0, fcm_delivered_at INTEGER, fcm_abandoned INTEGER NOT NULL DEFAULT 0,
     UNIQUE(account_id, folder, uid_validity, message_uid)
   );
 `);
@@ -84,6 +90,14 @@ db.exec(`
 for (const [column, definition] of Object.entries({
   wxpusher_pending: 'INTEGER NOT NULL DEFAULT 0', wxpusher_attempts: 'INTEGER NOT NULL DEFAULT 0',
   wxpusher_next_attempt_at: 'INTEGER NOT NULL DEFAULT 0', wxpusher_delivered_at: 'INTEGER', wxpusher_abandoned: 'INTEGER NOT NULL DEFAULT 0'
+})) {
+  if (!db.prepare('PRAGMA table_info(notification_events)').all().some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE notification_events ADD COLUMN ${column} ${definition}`);
+  }
+}
+for (const [column, definition] of Object.entries({
+  fcm_pending: 'INTEGER NOT NULL DEFAULT 0', fcm_attempts: 'INTEGER NOT NULL DEFAULT 0',
+  fcm_next_attempt_at: 'INTEGER NOT NULL DEFAULT 0', fcm_delivered_at: 'INTEGER', fcm_abandoned: 'INTEGER NOT NULL DEFAULT 0'
 })) {
   if (!db.prepare('PRAGMA table_info(notification_events)').all().some((item) => item.name === column)) {
     db.exec(`ALTER TABLE notification_events ADD COLUMN ${column} ${definition}`);
@@ -854,6 +868,76 @@ function publicNotificationConfig(config = getNotificationConfig()) {
     wxpusherTopicIds: config.wxpusherTopicIds
   };
 }
+const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+const FCM_TOKEN_AUDIENCE = 'https://oauth2.googleapis.com/token';
+let fcmAccessTokenCache = null;
+function readFcmServiceAccount() {
+  let raw = String(process.env.FCM_SERVICE_ACCOUNT_JSON || '').trim();
+  if (!raw && process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    try { raw = fs.readFileSync(process.env.GOOGLE_APPLICATION_CREDENTIALS, 'utf8').trim(); }
+    catch { throw new Error('无法读取 FCM 服务账号文件。'); }
+  }
+  if (!raw) return null;
+  let account;
+  try { account = JSON.parse(raw); }
+  catch { throw new Error('FCM 服务账号 JSON 格式无效。'); }
+  const projectId = String(account?.project_id || '');
+  const clientEmail = String(account?.client_email || '');
+  const privateKey = String(account?.private_key || '').replace(/\\n/g, '\n');
+  if (account?.type !== 'service_account' || !/^[a-z][a-z0-9-]{4,28}[a-z0-9]$/.test(projectId)
+      || !/^[^\s@]+@[^\s@]+$/.test(clientEmail) || !privateKey.includes('BEGIN PRIVATE KEY')) {
+    throw new Error('FCM 服务账号缺少有效的项目 ID、客户端邮箱或私钥。');
+  }
+  return { projectId, clientEmail, privateKey };
+}
+async function getFcmAccessToken() {
+  const account = readFcmServiceAccount();
+  if (!account) throw new Error('FCM 服务账号尚未配置。');
+  const keyFingerprint = hash(`${account.projectId}\n${account.clientEmail}\n${account.privateKey}`);
+  if (fcmAccessTokenCache?.fingerprint === keyFingerprint && fcmAccessTokenCache.expiresAt > Date.now() + 60_000) {
+    return { projectId: account.projectId, accessToken: fcmAccessTokenCache.accessToken };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const key = await importPKCS8(account.privateKey, 'RS256');
+  const assertion = await new SignJWT({ scope: FCM_SCOPE })
+    .setProtectedHeader({ alg: 'RS256', typ: 'JWT' })
+    .setIssuer(account.clientEmail)
+    .setSubject(account.clientEmail)
+    .setAudience(FCM_TOKEN_AUDIENCE)
+    .setIssuedAt(now)
+    .setExpirationTime(now + 3600)
+    .sign(key);
+  const response = await fetch(FCM_TOKEN_AUDIENCE, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion }),
+    signal: AbortSignal.timeout(10_000)
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.access_token) throw new Error(`FCM OAuth token request failed (${response.status}).`);
+  const expiresIn = Math.max(60, Number(result.expires_in) || 3600);
+  fcmAccessTokenCache = { fingerprint: keyFingerprint, accessToken: result.access_token, expiresAt: Date.now() + expiresIn * 1000 };
+  return { projectId: account.projectId, accessToken: result.access_token };
+}
+async function sendFcmWake(token) {
+  const { projectId, accessToken } = await getFcmAccessToken();
+  const response = await fetch(`https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ message: { token, data: { type: 'mail.new' }, android: { priority: 'HIGH', ttl: '3600s' } } }),
+    signal: AbortSignal.timeout(10_000)
+  });
+  if (response.ok) return;
+  const result = await response.json().catch(() => ({}));
+  const status = String(result?.error?.status || '');
+  const detailCode = (result?.error?.details || []).map((item) => String(item?.errorCode || '')).find(Boolean) || '';
+  if (detailCode === 'UNREGISTERED' || (response.status === 404 && status === 'NOT_FOUND')) {
+    const error = new Error('FCM registration is no longer valid.');
+    error.unregistered = true;
+    throw error;
+  }
+  throw new Error(`FCM message request failed (${response.status}${status ? ` ${status}` : ''}).`);
+}
 const ipv4BlockedRanges = [
   ['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],
   ['192.0.0.0',24],['192.0.2.0',24],['192.88.99.0',24],['192.168.0.0',16],['198.18.0.0',15],['198.51.100.0',24],
@@ -1051,6 +1135,10 @@ function eventPayload(account, item, uid, code) {
     summary:code ? `验证码：${code}` : subject
   };
 }
+function hasActivePushDevice() {
+  return Boolean(db.prepare(`SELECT 1 FROM push_devices d JOIN sessions s ON s.token_hash=d.session_hash
+    WHERE s.expires_at>? LIMIT 1`).get(Date.now()));
+}
 async function scanAccountForNotifications(account, config) {
   return withFreshAccount(account, async (fresh) => {
     const client = makeImap(fresh);
@@ -1072,8 +1160,8 @@ async function scanAccountForNotifications(account, config) {
         const end = Math.min(highest, last + 50);
         const fetched = await client.fetchAll(`${last + 1}:${end}`, { uid:true, envelope:true, internalDate:true, size:true }, { uid:true });
         const insertEvent = db.prepare(`INSERT OR IGNORE INTO notification_events
-          (account_id,message_uid,uid_validity,folder,payload,created_at,webhook_pending,webhook_next_attempt_at)
-          VALUES (?,?,?,'INBOX',?,?,?,?)`);
+          (account_id,message_uid,uid_validity,folder,payload,created_at,webhook_pending,webhook_next_attempt_at,fcm_pending,fcm_next_attempt_at)
+          VALUES (?,?,?,'INBOX',?,?,?,?,?,?)`);
         const updatePayload = db.prepare('UPDATE notification_events SET payload = ? WHERE id = ?');
         let count = 0;
         for (const item of fetched) {
@@ -1091,7 +1179,9 @@ async function scanAccountForNotifications(account, config) {
           }
           const payload = eventPayload(account, item, uid, code);
           const now = Date.now();
-          const result = insertEvent.run(account.id, uid, validity, encrypt(payload), now, config.pushProvider === 'webhook' && config.webhookEnabled && config.webhookUrl ? 1 : 0, now);
+          const result = insertEvent.run(account.id, uid, validity, encrypt(payload), now,
+            config.pushProvider === 'webhook' && config.webhookEnabled && config.webhookUrl ? 1 : 0,
+            now, hasActivePushDevice() ? 1 : 0, now);
           if (result.changes) {
             const eventId = Number(result.lastInsertRowid);
             payload.eventId = eventId;
@@ -1244,6 +1334,49 @@ async function deliverPendingWxPusher(config) {
     }
   }
 }
+async function deliverPendingFcm(config) {
+  if (!config.enabled) return;
+  try { if (!readFcmServiceAccount()) return; }
+  catch { console.warn('FCM delivery paused because the service-account configuration is invalid.'); return; }
+  const defaultId = getDefaultAccountId();
+  const due = defaultId
+    ? db.prepare(`SELECT id,fcm_attempts FROM notification_events WHERE fcm_pending=1 AND fcm_abandoned=0 AND fcm_next_attempt_at<=? AND account_id=? ORDER BY id LIMIT 5`).all(Date.now(), defaultId)
+    : db.prepare(`SELECT id,fcm_attempts FROM notification_events WHERE fcm_pending=1 AND fcm_abandoned=0 AND fcm_next_attempt_at<=? ORDER BY id LIMIT 5`).all(Date.now());
+  for (const row of due) {
+    const devices = db.prepare(`SELECT d.device_id,d.token_hash,d.token_encrypted FROM push_devices d
+      JOIN sessions s ON s.token_hash=d.session_hash WHERE s.expires_at>? ORDER BY d.created_at`).all(Date.now());
+    const attempt = Number(row.fcm_attempts) + 1;
+    if (!devices.length) {
+      db.prepare('UPDATE notification_events SET fcm_pending=0,fcm_attempts=?,fcm_abandoned=1 WHERE id=?').run(attempt, row.id);
+      continue;
+    }
+    let failures = 0;
+    for (const device of devices) {
+      let token;
+      try { token = String(decrypt(device.token_encrypted)?.token || ''); }
+      catch {
+        db.prepare('DELETE FROM push_devices WHERE device_id=? AND token_hash=?').run(device.device_id, device.token_hash);
+        continue;
+      }
+      try { await sendFcmWake(token); }
+      catch (error) {
+        if (error?.unregistered) {
+          db.prepare('DELETE FROM push_devices WHERE device_id=? AND token_hash=?').run(device.device_id, device.token_hash);
+        } else {
+          failures += 1;
+        }
+      }
+    }
+    if (!failures) {
+      db.prepare('UPDATE notification_events SET fcm_pending=0,fcm_attempts=?,fcm_delivered_at=? WHERE id=?').run(attempt, Date.now(), row.id);
+      continue;
+    }
+    const abandoned = attempt >= 4 ? 1 : 0;
+    const next = Date.now() + Math.min(15, 2 ** attempt) * 60_000;
+    db.prepare('UPDATE notification_events SET fcm_attempts=?,fcm_next_attempt_at=?,fcm_abandoned=? WHERE id=?').run(attempt, next, abandoned, row.id);
+    console.warn(`FCM delivery ${row.id} ${abandoned ? 'abandoned' : 'will retry'} after transient failure.`);
+  }
+}
 let notificationSweepTimer = null;
 let notificationSweepRunning = false;
 let notificationSweepRequested = false;
@@ -1268,6 +1401,7 @@ function scheduleNotificationSweep(delay = 120_000) {
         }
         await deliverPendingWebhooks(config);
         await deliverPendingWxPusher(config);
+        await deliverPendingFcm(config);
       }
     } catch (error) { console.warn('New-mail notification sweep failed:', safeError(error)); }
     finally {
@@ -1293,6 +1427,7 @@ app.put('/api/preferences/default-account', auth, (req, res) => {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(accountId);
   if (accountId) db.prepare('UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1 AND account_id<>?').run(accountId);
   if (accountId) db.prepare('UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1 AND account_id<>?').run(accountId);
+  if (accountId) db.prepare('UPDATE notification_events SET fcm_pending=0,fcm_abandoned=1 WHERE fcm_pending=1 AND account_id<>?').run(accountId);
   scheduleNotificationSweep(0);
   res.json({ defaultAccountId: accountId });
 });
@@ -1331,6 +1466,9 @@ app.put('/api/notifications/config', auth, async (req, res) => {
     }
     if ((previous.wxpusherEnabled && (!wxpusherEnabled || previous.wxpusherUids !== wxpusherUids || previous.wxpusherTopicIds !== wxpusherTopicIds || previous.wxpusherAppToken !== wxpusherAppToken)) || (previous.enabled && !enabled)) {
       db.prepare('UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1').run();
+    }
+    if (previous.enabled && !enabled) {
+      db.prepare('UPDATE notification_events SET fcm_pending=0,fcm_abandoned=1 WHERE fcm_pending=1').run();
     }
     if (previous.pushProvider !== pushProvider) {
       db.prepare('UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1').run();
@@ -1382,6 +1520,46 @@ app.delete('/api/notifications/webhook', auth, (req, res) => {
   db.prepare('UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1').run();
   scheduleNotificationSweep(0);
   res.json(publicNotificationConfig(config));
+});
+app.post('/api/push/devices', auth, async (req, res) => {
+  const deviceId = String(req.body?.deviceId || '').trim();
+  const token = String(req.body?.token || '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId)) {
+    return res.status(400).json({ error: '设备标识无效。' });
+  }
+  if (!token || token.length > 4096 || /[\r\n]/.test(token)) return res.status(400).json({ error: 'FCM 设备令牌无效。' });
+  try {
+    await getFcmAccessToken();
+  } catch {
+    return res.status(503).json({ error: 'FCM 服务端尚未配置或授权失败，请检查服务账号配置。' });
+  }
+  const tokenHash = hash(token);
+  const now = Date.now();
+  try {
+    const register = db.transaction(() => {
+      const cursor = Number(db.prepare('SELECT COALESCE(MAX(id),0) AS cursor FROM notification_events').get().cursor);
+      db.prepare('DELETE FROM push_devices WHERE token_hash=? AND device_id<>?').run(tokenHash, deviceId);
+      db.prepare(`INSERT INTO push_devices (device_id,session_hash,token_hash,token_encrypted,created_at,updated_at)
+        VALUES (?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET session_hash=excluded.session_hash,
+        token_hash=excluded.token_hash,token_encrypted=excluded.token_encrypted,updated_at=excluded.updated_at`)
+        .run(deviceId, req.sessionHash, tokenHash, encrypt({ token }), now, now);
+      return cursor;
+    });
+    const cursor = register.immediate();
+    scheduleNotificationSweep(0);
+    res.json({ ok: true, cursor });
+  } catch {
+    res.status(500).json({ error: '无法保存此设备的推送登记。' });
+  }
+});
+app.delete('/api/push/devices/:deviceId', auth, (req, res) => {
+  const deviceId = String(req.params.deviceId || '').trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deviceId)) {
+    return res.status(400).json({ error: '设备标识无效。' });
+  }
+  db.prepare('DELETE FROM push_devices WHERE device_id=? AND session_hash=?').run(deviceId, req.sessionHash);
+  scheduleNotificationSweep(0);
+  res.json({ ok: true });
 });
 app.get('/api/notifications/events', auth, (req, res) => {
   const afterValue = req.query.after;
@@ -1497,7 +1675,7 @@ async function exportBackup(req, res, encrypted, passphrase) {
     try {
       snapshot.transaction(() => {
         snapshot.exec('DELETE FROM sessions; DELETE FROM oauth_states; DELETE FROM identity_oauth_states;');
-        snapshot.exec('DELETE FROM ai_digest_runs; UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1; UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1;');
+        snapshot.exec('DELETE FROM push_devices; DELETE FROM ai_digest_runs; UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1; UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1; UPDATE notification_events SET fcm_pending=0,fcm_abandoned=1 WHERE fcm_pending=1;');
         snapshot.prepare('DELETE FROM app_preferences WHERE key = ?').run('__system_restore_tx');
       })();
     } finally { snapshot.close(); }
@@ -1547,8 +1725,11 @@ app.post('/api/backup/restore', auth, express.raw({ type: 'application/octet-str
     const destinationTables = backupTableNames(db);
     try {
       sourceTables = verifyBackupDatabase(candidate, restoredKey);
-      if (JSON.stringify(sourceTables) !== JSON.stringify(destinationTables)) throw new Error('备份文件与当前邮汇版本的数据库结构不一致。');
+      const missingTables = destinationTables.filter((table) => !sourceTables.includes(table) && table !== 'push_devices');
+      const extraTables = sourceTables.filter((table) => !destinationTables.includes(table));
+      if (missingTables.length || extraTables.length) throw new Error('备份文件与当前邮汇版本的数据库结构不一致。');
       for (const tableName of destinationTables) {
+        if (!sourceTables.includes(tableName)) continue;
         if (tableName !== 'notification_events' && JSON.stringify(backupTableColumns(db, tableName)) !== JSON.stringify(backupTableColumns(candidate, tableName))) {
           throw new Error('备份文件的数据库结构与当前版本不兼容。');
         }
@@ -1568,13 +1749,13 @@ app.post('/api/backup/restore', auth, express.raw({ type: 'application/octet-str
     pendingWritten = true;
     restoreInProgress = true;
     db.prepare('ATTACH DATABASE ? AS restore_source').run(candidatePath);
-    const transientTables = new Set(['sessions', 'oauth_states', 'identity_oauth_states', 'ai_digest_runs']);
+    const transientTables = new Set(['sessions', 'oauth_states', 'identity_oauth_states', 'ai_digest_runs', 'push_devices']);
     const quote = (name) => `"${String(name).replaceAll('"', '""')}"`;
     try {
       db.transaction(() => {
         for (const tableName of destinationTables) db.exec(`DELETE FROM main.${quote(tableName)}`);
         for (const tableName of destinationTables) {
-          if (transientTables.has(tableName)) continue;
+          if (transientTables.has(tableName) || !sourceTables.includes(tableName)) continue;
           const destinationColumns = backupTableColumns(db, tableName);
           const sourceNames = new Set((restoreSourceColumns.get(tableName) || []).map((column) => column.name));
           const columns = (tableName === 'notification_events'
@@ -1585,6 +1766,7 @@ app.post('/api/backup/restore', auth, express.raw({ type: 'application/octet-str
         }
         db.prepare('UPDATE main.notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1').run();
         db.prepare('UPDATE main.notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1').run();
+        db.prepare('UPDATE main.notification_events SET fcm_pending=0,fcm_abandoned=1 WHERE fcm_pending=1').run();
         db.prepare('INSERT INTO main.app_preferences (key,value) VALUES (?,?)').run('__system_restore_tx', transactionId);
       }).immediate();
       restoreCommitted = true;

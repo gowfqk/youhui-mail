@@ -24,6 +24,23 @@ npm start
 
 浏览器访问 `http://localhost:3000`。首次打开会要求创建至少 12 位的工作台密码。随后选择“添加邮箱”，填写账号和服务商要求的应用专用密码；应用会先实际验证 IMAP 收件和 SMTP 发件连接，成功后才保存账户。
 
+## Docker 镜像
+
+GitHub Actions 会在 `main` 分支或 `v*` 版本标签推送时构建并发布 `ghcr.io/gowfqk/youhui-mail`；Pull Request 只验证构建，不发布镜像。运行时数据库和加密密钥保存在独立的 `/data` 卷中，不会打包进镜像。首次启动时，打开 `http://localhost:3000` 并设置至少 12 位的工作台密码。
+
+镜像若为私有，运行前需使用有该包读取权限的 GitHub 账户登录 `ghcr.io`。
+
+```sh
+docker volume create youhui-mail-data
+docker run -d --name youhui-mail --restart unless-stopped \
+  -p 3000:3000 \
+  -v youhui-mail-data:/data \
+  -e APP_BASE_URL=https://mail.example.com \
+  ghcr.io/gowfqk/youhui-mail:latest
+```
+
+`APP_BASE_URL` 用于 OAuth 回调，应替换为实际的 HTTPS 根地址；正式部署仍应通过反向代理启用 HTTPS。备份、邮箱数据和 `data/encryption.key` 必须保存在受保护的持久化存储中，不要将它们复制到镜像。
+
 ## OAuth 客户端和回调地址
 
 在工作台打开“设置 → OAuth 登录”，填写客户端 ID 与客户端密钥。OAuth 密钥在服务端以 AES-256-GCM 加密保存；API 只返回“是否已配置”状态，不回传密钥。未填写的输入框会保留已有值。首次启动时，如果数据库还没有 OAuth 配置，旧环境变量 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`MICROSOFT_CLIENT_ID`、`MICROSOFT_CLIENT_SECRET` 会迁移到加密配置；已有的数据库配置不会被覆盖。

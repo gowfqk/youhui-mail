@@ -1,0 +1,9 @@
+# Default-deny: runtime state, secrets, backups, notes, and unrelated files never enter the build context.
+*
+!package.json
+!package-lock.json
+!server.js
+!ai-service.js
+!mcp-service.js
+!public/
+!public/**

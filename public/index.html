@@ -4,15 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#f5f7fb">
+  <link rel="icon" href="/youhui-favicon-367acab1d40d.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/youhui-favicon-32-db585dae104d.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/youhui-touch-icon-b222de5879d2.png">
+  <link rel="manifest" href="/youhui-site-4b9015c3c807.webmanifest">
   <title>邮汇 · 邮箱工作台</title>
-  <link rel="stylesheet" href="/style-ae0d5ef80203.css">
-  <script src="/app-f95d24a0db17.js" defer></script>
+  <link rel="stylesheet" href="/style-2b6b263d1b67.css">
+  <link rel="stylesheet" href="/brand-icon-8631112507a5.css">
+  <script src="/app-13f4614af6eb.js" defer></script>
 </head>
 <body>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <section id="authView" class="auth-view hidden">
     <div class="auth-card">
-      <div class="brand brand-center"><span class="brand-mark">邮</span><span>邮汇</span></div>
+      <div class="brand brand-center"><span class="brand-mark"><img src="/youhui-app-icon-192-02ed2d31a0b6.png" class="brand-icon" alt=""></span><span>邮汇</span></div>
       <div class="auth-art" aria-hidden="true"><div class="art-orbit orbit-one"></div><div class="art-orbit orbit-two"></div><div class="art-envelope"><span></span></div><span class="art-dot dot-one"></span><span class="art-dot dot-two"></span></div>
       <p class="eyebrow">YOUR EMAIL, IN ONE PLACE</p>
       <h1 id="authTitle">欢迎使用邮汇</h1>
@@ -36,7 +41,7 @@
   <div id="appView" class="app-shell hidden">
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-top">
-        <div class="brand"><span class="brand-mark">邮</span><span>邮汇</span><span class="brand-tag">MAIL</span></div>
+        <div class="brand"><span class="brand-mark"><img src="/youhui-app-icon-192-02ed2d31a0b6.png" class="brand-icon" alt=""></span><span>邮汇</span><span class="brand-tag">MAIL</span></div>
         <button id="mobileCloseSidebar" class="icon-button sidebar-close" aria-label="关闭侧栏">×</button>
       </div>
       <button id="composeButton" class="button compose-button"><span class="compose-plus">＋</span>写邮件</button>
@@ -71,6 +76,7 @@
           <button id="topAddButton" class="top-add-button"><span>＋</span> 添加邮箱</button>
         </div>
       </header>
+      <div id="mcpApprovalBanner" class="mcp-approval-banner hidden" role="status" aria-live="polite"><span id="mcpApprovalBannerText">有待确认的 MCP 邮件操作</span><button id="reviewMcpApprovals" type="button">查看并处理</button></div>
 
       <div id="workspace" class="workspace">
         <section id="listPane" class="list-pane">
@@ -153,6 +159,8 @@
         <button id="settingsTabTranslation" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelTranslation" data-settings-tab="translation">邮件翻译</button>
         <button id="settingsTabNotifications" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelNotifications" data-settings-tab="notifications">新邮件通知</button>
         <button id="settingsTabOAuth" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelOAuth" data-settings-tab="oauth">OAuth 登录</button>
+        <button id="settingsTabMCP" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelMCP" data-settings-tab="mcp">Agent / MCP</button>
+        <button id="settingsTabBackup" type="button" role="tab" aria-selected="false" aria-controls="settingsPanelBackup" data-settings-tab="backup">备份与恢复</button>
       </nav>
       <div class="settings-content">
         <section id="settingsPanelAccounts" class="settings-panel" role="tabpanel" aria-labelledby="settingsTabAccounts" data-settings-panel="accounts">
@@ -219,12 +227,23 @@
               <button id="enableBrowserNotifications" class="button button-quiet" type="button">启用浏览器通知</button>
             </div>
             <div class="ai-settings-divider"></div>
+            <label class="form-field">推送类型<select id="notificationProvider"><option value="webhook">通用 Webhook（企业微信机器人自动识别）</option><option value="wxpusher">WxPusher</option></select><small>切换类型不会删除另一种服务的配置；保存设置不会发送测试通知。</small></label>
+            <div id="webhookProviderFields">
             <label class="ai-daily-toggle"><input id="webhookEnabled" type="checkbox"><span><strong>启用 Webhook 推送</strong><small>每封新邮件单独推送一次；失败最多重试 3 次。保存设置不会发送测试请求。</small></span></label>
             <label class="form-field">Webhook HTTPS 地址<input id="webhookUrl" type="url" maxlength="2048" autocomplete="url" placeholder="https://hooks.example.com/your-endpoint"><small id="webhookUrlHint">地址会加密保存且不会回显；留空表示保留已保存的地址。仅允许解析到公网的 HTTPS 地址。</small></label>
             <label class="form-field">可选签名密钥<input id="webhookSecret" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新密钥；留空保留已保存的密钥"><small>如果设置，签名通过 X-Youhui-Signature 请求头发送，验证方法见下方说明。</small></label>
-            <p class="notification-disclosure">浏览器通知仅在浏览器已授予权限且工作台不在前台时显示；前台使用时不会弹系统通知。通知只包含发件人、主题、邮箱账户和时间，不包含正文或附件。仅当新邮件明确提及验证码/校验码等关键词且附近有 4–8 位数字时才显示验证码；验证码会出现在通知和 Webhook 摘要中。</p>
+            </div>
+            <div id="wxpusherProviderFields">
+            <div class="ai-settings-divider"></div>
+            <div class="settings-panel-heading"><h3>WxPusher 推送</h3><p>通过 WxPusher 向指定接收目标推送新邮件；密钥不会在浏览器中回显。</p></div>
+            <label class="ai-daily-toggle"><input id="wxpusherEnabled" type="checkbox"><span><strong>启用 WxPusher 推送</strong><small>保存设置不会发送通知；仅使用选中的推送类型。</small></span></label>
+            <label class="form-field">WxPusher AppToken<input id="wxpusherAppToken" type="password" maxlength="4096" autocomplete="new-password" placeholder="输入新 AppToken；留空保留已保存值"><small id="wxpusherAppTokenHint">尚未检查配置状态。</small></label>
+            <label class="form-field">UID 列表<textarea id="wxpusherUids" rows="3" maxlength="10000" autocomplete="off" placeholder="每行或逗号分隔一个 UID"></textarea><small id="wxpusherUidsHint">支持逐行或逗号分隔；保存时留空将清除 UID 列表。</small></label>
+            <label class="form-field">topicId 列表<textarea id="wxpusherTopicIds" rows="3" maxlength="10000" autocomplete="off" placeholder="每行或逗号分隔一个 topicId"></textarea><small id="wxpusherTopicIdsHint">支持逐行或逗号分隔；保存时留空将清除 topicId 列表。</small></label>
+            </div>
+            <p class="notification-disclosure">浏览器通知仅在浏览器已授予权限且工作台不在前台时显示；前台使用时不会弹系统通知。通知只包含发件人、主题、邮箱账户和时间，不包含正文或附件。仅当新邮件明确提及验证码/校验码等关键词且附近有 4–8 位数字时才显示验证码；验证码会出现在通知和推送摘要中。WxPusher 受理不代表送达；为避免重复，受理失败或结果不确定时不会自动重试。</p>
             <div id="notificationsSettingsStatus" class="notifications-settings-status" role="status" aria-live="polite"></div>
-            <div class="dialog-footer notifications-settings-footer"><button id="clearWebhookConfig" class="button button-quiet" type="button">清除 Webhook 配置</button><div class="notification-footer-actions"><button id="testWebhook" class="button button-quiet" type="button" disabled>测试 Webhook</button><button id="saveNotificationsConfig" class="button button-primary" type="submit">保存通知设置</button></div></div>
+            <div class="dialog-footer notifications-settings-footer"><button id="clearWebhookConfig" class="button button-quiet" type="button">清除 Webhook 配置</button><div class="notification-footer-actions"><button id="testWebhook" class="button button-quiet" type="button" disabled>测试 Webhook</button><button id="testWxpusher" class="button button-quiet hidden" type="button" disabled>测试 WxPusher</button><button id="saveNotificationsConfig" class="button button-primary" type="submit">保存通知设置</button></div></div>
           </form>
         </section>
         <section id="settingsPanelOAuth" class="settings-panel hidden" role="tabpanel" aria-labelledby="settingsTabOAuth" data-settings-panel="oauth">
@@ -265,6 +284,59 @@
             <div id="oauthSettingsStatus" class="oauth-settings-status" role="status" aria-live="polite"></div>
             <div class="dialog-footer oauth-settings-footer"><span class="oauth-save-note">密钥不回传；留空保留已有值</span><button id="saveOAuthConfig" class="button button-primary" type="submit">保存 OAuth 设置</button></div>
           </form>
+        </section>
+        <section id="settingsPanelMCP" class="settings-panel hidden" role="tabpanel" aria-labelledby="settingsTabMCP" data-settings-panel="mcp">
+          <div class="settings-panel-heading"><h3>Agent 邮件接入（MCP）</h3><p>通过标准 Streamable HTTP 让支持 MCP 的 Agent 按令牌权限访问已连接邮箱；发送和删信操作须由你在工作台确认后才会执行。</p></div>
+          <div class="mcp-config-card">
+            <h4>MCP 端点</h4>
+            <div class="oauth-callback-line"><span>服务地址</span><code id="mcpEndpoint">正在读取…</code></div>
+            <p>使用此 HTTPS 地址连接；认证方式为 HTTP Bearer token。接口兼容当前 MCP 协议及常见旧版 Streamable HTTP 客户端。</p>
+            <h4>提供给 Agent 的工具</h4>
+            <ul class="mcp-tool-list">
+              <li><code>list_accounts</code>、<code>list_folders</code>：查看邮箱账户与文件夹</li>
+              <li><code>search_emails</code>、<code>get_email</code>：搜索和读取邮件（读取会标记为已读）</li>
+              <li><code>manage_email</code>：标记读/未读、加星、归档；移入已删除前需确认</li>
+              <li><code>send_email</code>：准备纯文本邮件；确认后才会通过所选邮箱发送</li>
+            </ul>
+            <p class="mcp-security-warning"><strong>安全说明：</strong>只创建 Agent 必需的最低权限令牌。旧版令牌会自动降为只读。MCP 不提供永久删除邮件工具；移入已删除文件夹也会先等待你确认。邮件正文是外部内容，Agent 不应把正文里的指令当作可信命令。</p>
+            <h4>权限令牌</h4>
+            <p class="mcp-scope-intro">每种权限的令牌都可单独设为访问全部已连接邮箱，或只访问你选定的邮箱。完全访问包含当前全部 MCP 邮件操作，但发送邮件和移入已删除仍须逐项确认。</p>
+            <div id="mcpPermissionRows" class="mcp-permission-rows"></div>
+            <div id="mcpTokenReveal" class="mcp-token-reveal hidden">
+              <label class="form-field" for="mcpTokenValue"><span id="mcpTokenScope">新令牌</span>（仅此次显示；关闭设置后会清除）<input id="mcpTokenValue" type="text" readonly autocomplete="off" spellcheck="false"></label>
+              <button id="copyMcpToken" class="button button-quiet" type="button">复制令牌</button>
+            </div>
+            <div id="mcpSettingsStatus" class="mcp-settings-status" role="status" aria-live="polite"></div>
+            <h4>待确认操作</h4>
+            <p>Agent 提交的邮件会先显示在这里；你确认后才会发送或移入已删除。</p>
+            <div id="mcpApprovalList" class="mcp-approval-list" aria-live="polite"><div class="settings-empty">正在检查待确认操作…</div></div>
+          </div>
+        </section>
+        <section id="settingsPanelBackup" class="settings-panel hidden" role="tabpanel" aria-labelledby="settingsTabBackup" data-settings-panel="backup">
+          <div class="settings-panel-heading"><h3>备份与恢复</h3><p>把工作台数据保存到本机，或从之前导出的邮汇备份恢复。</p></div>
+          <div class="backup-actions">
+            <article class="backup-card">
+              <div class="backup-card-icon" aria-hidden="true">↓</div>
+              <div class="backup-card-copy"><h4>创建备份</h4><p>包含邮箱账户、工作台设置、AI 与翻译配置；登录会话不会包含在备份中。可选择使用口令加密整个备份文件。</p></div>
+              <div class="backup-encryption-options">
+                <label class="backup-encryption-toggle"><input id="backupEncryptEnabled" type="checkbox"> 使用口令加密备份</label>
+                <div id="backupPassphraseFields" class="backup-passphrase-fields hidden">
+                  <label for="backupPassphrase">备份密码<input id="backupPassphrase" type="password" minlength="12" maxlength="1024" autocomplete="new-password" placeholder="至少 12 个字符"></label>
+                  <label for="backupPassphraseConfirm">再次输入<input id="backupPassphraseConfirm" type="password" minlength="12" maxlength="1024" autocomplete="new-password" placeholder="确认备份密码"></label>
+                  <small>此密码不会保存在工作台。遗忘后无法恢复加密备份。</small>
+                </div>
+              </div>
+              <button id="downloadBackupButton" class="button button-primary" type="button">下载备份文件</button>
+            </article>
+            <article class="backup-card backup-restore-card">
+              <div class="backup-card-icon" aria-hidden="true">↥</div>
+              <div class="backup-card-copy"><h4>恢复备份</h4><p>选择邮汇导出的 <code>.yhbackup</code> 文件；恢复前会再次确认，成功后需要重新登录。</p></div>
+              <button id="chooseBackupFileButton" class="button button-quiet" type="button">选择备份文件</button>
+              <input id="backupRestoreFile" type="file" accept=".yhbackup,application/vnd.youhui-mail.backup" hidden>
+            </article>
+          </div>
+          <div id="backupSettingsStatus" class="backup-settings-status" role="status" aria-live="polite"></div>
+          <p class="backup-security-warning"><strong>重要安全提示：</strong>未加密备份包含可解密邮箱凭据的密钥；启用口令加密后，只有持有备份文件和正确密码的人才能恢复。无论哪种格式，都请保存到受信任的位置。</p>
         </section>
       </div>
     </div>

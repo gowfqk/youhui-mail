@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { attachAI } from './ai-service.js';
+import { attachMcp } from './mcp-service.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
@@ -23,8 +24,30 @@ fs.chmodSync(DATA_DIR, 0o700);
 const KEY_PATH = path.join(DATA_DIR, 'encryption.key');
 if (!fs.existsSync(KEY_PATH)) fs.writeFileSync(KEY_PATH, crypto.randomBytes(32), { mode: 0o600, flag: 'wx' });
 fs.chmodSync(KEY_PATH, 0o600);
-const ENCRYPTION_KEY = fs.readFileSync(KEY_PATH);
+let ENCRYPTION_KEY = fs.readFileSync(KEY_PATH);
 if (ENCRYPTION_KEY.length !== 32) throw new Error('加密密钥格式错误：data/encryption.key 必须是 32 字节。');
+const BACKUP_MAGIC = Buffer.from('YOUHUI-MAIL-BACKUP\n', 'ascii');
+const BACKUP_ENCRYPTED_MAGIC = Buffer.from('YOUHUI-MAIL-ENCRYPTED-BACKUP\n', 'ascii');
+const BACKUP_MAX_BYTES = 250 * 1024 * 1024;
+const RESTORE_PENDING_PATH = path.join(DATA_DIR, '.restore-pending.json');
+function writePrivateFile(filePath, contents) {
+  const temporaryPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, contents, { mode: 0o600, flag: 'wx' });
+    fs.chmodSync(temporaryPath, 0o600);
+    fs.renameSync(temporaryPath, filePath);
+    fs.chmodSync(filePath, 0o600);
+  } finally {
+    try { fs.rmSync(temporaryPath, { force: true }); } catch {}
+  }
+}
+function decryptWithKey(value, key) {
+  const all = Buffer.from(String(value || ''), 'base64');
+  if (all.length < 29) throw new Error('备份中的加密数据格式无效。');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, all.subarray(0, 12));
+  decipher.setAuthTag(all.subarray(12, 28));
+  return JSON.parse(Buffer.concat([decipher.update(all.subarray(28)), decipher.final()]).toString('utf8'));
+}
 const db = new Database(path.join(DATA_DIR, 'mail.sqlite'));
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
@@ -57,6 +80,32 @@ db.exec(`
     UNIQUE(account_id, folder, uid_validity, message_uid)
   );
 `);
+// WxPusher has its own retry lifecycle; do not repurpose legacy webhook fields.
+for (const [column, definition] of Object.entries({
+  wxpusher_pending: 'INTEGER NOT NULL DEFAULT 0', wxpusher_attempts: 'INTEGER NOT NULL DEFAULT 0',
+  wxpusher_next_attempt_at: 'INTEGER NOT NULL DEFAULT 0', wxpusher_delivered_at: 'INTEGER', wxpusher_abandoned: 'INTEGER NOT NULL DEFAULT 0'
+})) {
+  if (!db.prepare('PRAGMA table_info(notification_events)').all().some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE notification_events ADD COLUMN ${column} ${definition}`);
+  }
+}
+function recoverPendingRestore() {
+  if (!fs.existsSync(RESTORE_PENDING_PATH)) return;
+  let pending;
+  try { pending = JSON.parse(fs.readFileSync(RESTORE_PENDING_PATH, 'utf8')); }
+  catch { throw new Error('检测到未完成的备份恢复记录，无法安全启动。'); }
+  const oldKey = Buffer.from(String(pending.oldKey || ''), 'base64');
+  const newKey = Buffer.from(String(pending.newKey || ''), 'base64');
+  if (!pending.id || oldKey.length !== 32 || newKey.length !== 32) throw new Error('备份恢复记录无效，服务已停止以保护数据。');
+  const marker = db.prepare('SELECT value FROM app_preferences WHERE key = ?').get('__system_restore_tx');
+  const committed = marker?.value === pending.id;
+  const safeKey = committed ? newKey : oldKey;
+  writePrivateFile(KEY_PATH, safeKey);
+  ENCRYPTION_KEY = safeKey;
+  fs.rmSync(RESTORE_PENDING_PATH, { force: true });
+  if (!committed) db.prepare('DELETE FROM app_preferences WHERE key = ?').run('__system_restore_tx');
+}
+recoverPendingRestore();
 db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
 db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').run(Date.now());
 db.prepare('DELETE FROM identity_oauth_states WHERE expires_at < ?').run(Date.now());
@@ -65,12 +114,17 @@ db.prepare('DELETE FROM notification_events WHERE created_at < ?').run(Date.now(
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
+let restoreInProgress = false;
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  next();
+});
+app.use((req, res, next) => {
+  if (restoreInProgress) return res.status(503).json({ error: '备份恢复正在应用，请稍后重新登录。' });
   next();
 });
 app.use(express.json({ limit: '28mb' }));
@@ -391,7 +445,7 @@ function getAccount(id) {
 function accountSummary(row) {
   return { id: row.id, label: row.label, email: row.email, provider: row.provider, authType: row.auth_type, createdAt: row.created_at };
 }
-function makeImap(account) {
+function makeImap(account, { maxIdleTime } = {}) {
   const credentials = account.credentials;
   const authData = account.auth_type === 'oauth'
     ? { user: account.username, accessToken: credentials.access_token }
@@ -399,7 +453,8 @@ function makeImap(account) {
   return new ImapFlow({
     host: account.imap_host, port: account.imap_port, secure: Boolean(account.imap_secure), auth: authData,
     logger: false, socketTimeout: 30000, greetingTimeout: 15000, connectionTimeout: 20000,
-    tls: { rejectUnauthorized: true }
+    tls: { rejectUnauthorized: true },
+    ...(Number.isFinite(maxIdleTime) ? { maxIdleTime } : {})
   });
 }
 function makeSmtp(account) {
@@ -510,6 +565,10 @@ function findFolder(mailboxes, key) {
   return mailboxes.find((m) => names.includes(String(m.name || m.path).split('/').at(-1).toLowerCase()) || names.includes(String(m.path).toLowerCase()))?.path || null;
 }
 function messageAddress(envelope, field) { return addressList(envelope?.[field] || []); }
+function markMailboxSynced(accountId) {
+  db.prepare('INSERT INTO app_preferences (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+    .run(`mailbox_last_sync:${accountId}`, String(Date.now()));
+}
 async function fetchMessages(account, folderKey, page, limit, query) {
   return withFreshAccount(account, async (fresh) => {
     const client = makeImap(fresh);
@@ -546,6 +605,7 @@ async function fetchMessages(account, folderKey, page, limit, query) {
         }
         allStarred.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
         const start = (page - 1) * limit;
+        markMailboxSynced(account.id);
         return { accountId: account.id, path: '*', messages: allStarred.slice(start, start + limit), total: matched };
       }
       const knownKeys = ['INBOX', 'Sent', 'Drafts', 'Archive', 'Trash', 'Spam'];
@@ -613,9 +673,11 @@ async function getMailDetail(account, folderKey, uid) {
         const inlineImages = inlineImageData(parsed.attachments || []);
         const cleanHtml = parsed.html ? sanitizeHtml(String(parsed.html), {
           allowedTags: ['a','p','br','div','span','b','strong','i','em','u','s','blockquote','ul','ol','li','table','thead','tbody','tr','td','th','h1','h2','h3','h4','pre','code','hr','font','img'],
-          allowedAttributes: { a: ['href','title'], td: ['colspan','rowspan'], th: ['colspan','rowspan'], font: ['color','size','face'], img: ['src','alt','title','width','height','data-external-src'] },
+          allowedAttributes: { a: ['href','title','target','rel'], td: ['colspan','rowspan'], th: ['colspan','rowspan'], font: ['color','size','face'], img: ['src','alt','title','width','height','data-external-src'] },
           allowedSchemes: ['http','https','mailto'], allowedSchemesByTag: { img: ['data'] }, allowProtocolRelative: false, disallowedTagsMode: 'discard',
-          transformTags: { img: (tagName, attributes) => {
+          transformTags: {
+            a: (tagName, attributes) => ({ tagName, attribs: { ...attributes, target: '_blank', rel: 'noopener noreferrer' } }),
+            img: (tagName, attributes) => {
             const safeAttributes = { ...attributes };
             const source = String(safeAttributes.src || '').trim();
             delete safeAttributes['data-external-src'];
@@ -628,7 +690,8 @@ async function getMailDetail(account, folderKey, uid) {
               delete safeAttributes.src;
             } else delete safeAttributes.src;
             return { tagName, attribs: safeAttributes };
-          } }
+          }
+          }
         }) : '';
         return {
           accountId: account.id, email: account.email, uid: item.uid, folder: pathName,
@@ -769,7 +832,12 @@ function getNotificationConfig() {
     intervalSeconds: notificationIntervals.has(Number(saved.intervalSeconds)) ? Number(saved.intervalSeconds) : 120,
     webhookEnabled: saved.webhookEnabled === true,
     webhookUrl: String(saved.webhookUrl || ''),
-    webhookSecret: String(saved.webhookSecret || '')
+    webhookSecret: String(saved.webhookSecret || ''),
+    pushProvider: saved.pushProvider === 'wxpusher' ? 'wxpusher' : 'webhook',
+    wxpusherEnabled: saved.wxpusherEnabled === true,
+    wxpusherAppToken: String(saved.wxpusherAppToken || ''),
+    wxpusherUids: String(saved.wxpusherUids || ''),
+    wxpusherTopicIds: String(saved.wxpusherTopicIds || '')
   };
 }
 function publicNotificationConfig(config = getNotificationConfig()) {
@@ -778,7 +846,12 @@ function publicNotificationConfig(config = getNotificationConfig()) {
     intervalSeconds: config.intervalSeconds,
     webhookEnabled: config.webhookEnabled,
     webhookConfigured: Boolean(config.webhookUrl),
-    webhookSecretConfigured: Boolean(config.webhookSecret)
+    webhookSecretConfigured: Boolean(config.webhookSecret),
+    pushProvider: config.pushProvider,
+    wxpusherEnabled: config.wxpusherEnabled,
+    wxpusherAppTokenConfigured: Boolean(config.wxpusherAppToken),
+    wxpusherUids: config.wxpusherUids,
+    wxpusherTopicIds: config.wxpusherTopicIds
   };
 }
 const ipv4BlockedRanges = [
@@ -830,20 +903,130 @@ async function validateWebhookUrl(value) {
   if (!addresses.length || addresses.some((entry) => !isPublicWebhookAddress(entry.address))) throw new Error('Webhook 主机必须解析到公网 IP 地址。');
   return { url, addresses };
 }
+function isWecomWebhook(url) {
+  return url.hostname.toLowerCase() === 'qyapi.weixin.qq.com' && url.pathname === '/cgi-bin/webhook/send';
+}
+function webhookPayload(url, payload) {
+  if (!isWecomWebhook(url)) return payload;
+  const clean = (value) => String(value || '').replace(/<@/g, '＜@').replace(/[\r\n]+/g, ' ').trim();
+  const lines = payload.test ? ['邮汇 Webhook 测试通知', '这是一条测试通知，不代表真实新邮件。'] : [
+    '邮汇新邮件通知',
+    `邮箱：${clean(payload.account?.email || payload.account?.label) || '未知'}`,
+    `发件人：${clean(payload.sender?.name)} ${clean(payload.sender?.email)}`.trim(),
+    `主题：${clean(payload.subject) || '（无主题）'}`,
+    ...(payload.verificationCode ? [`验证码：${clean(payload.verificationCode)}`] : []),
+    ...(payload.receivedAt ? [`时间：${clean(payload.receivedAt)}`] : [])
+  ];
+  let content = '';
+  for (const character of lines.join('\n')) {
+    if (Buffer.byteLength(content + character, 'utf8') > 2048) break;
+    content += character;
+  }
+  return { msgtype:'text', text:{ content } };
+}
+function webhookFailureMessage(error) {
+  const status = Number(error?.webhookStatus);
+  const wecomCode = Number(error?.wecomCode);
+  if (Number.isInteger(wecomCode) && wecomCode !== 0) return `企业微信拒绝了测试通知（错误码 ${wecomCode}），请检查机器人地址、权限和安全设置。`;
+  if (Number.isInteger(status) && status >= 100 && status <= 599) return `接收端返回 HTTP ${status}，请检查 Webhook 地址和接收端配置。`;
+  if (error?.code === 'ENOTFOUND' || error?.code === 'EAI_AGAIN') return '无法解析 Webhook 域名，请检查地址和服务器 DNS。';
+  if (error?.code === 'ETIMEDOUT' || error?.code === 'WEBHOOK_TIMEOUT') return '连接 Webhook 超时，请检查服务器网络及接收端。';
+  if (error?.code === 'WEBHOOK_INVALID_RESPONSE') return '企业微信的响应格式异常，请检查机器人地址和服务状态。';
+  if (error?.code && /CERT|TLS|SSL/i.test(error.code)) return 'Webhook 的 HTTPS 证书验证失败，请检查接收端证书。';
+  return '测试通知未送达，请检查已保存的 Webhook 地址与接收端服务。';
+}
+function parseWxPusherTargets(value, kind) {
+  const items = String(value || '').split(/[\s,，;；]+/).map((item) => item.trim()).filter(Boolean);
+  if (kind === 'topicIds') {
+    if (items.some((item) => !/^\d+$/.test(item) || !Number.isSafeInteger(Number(item)) || Number(item) <= 0)) throw new Error('WxPusher Topic ID 须为正整数，可用逗号或空格分隔。');
+    const unique = [...new Set(items.map(Number))];
+    if (unique.length > 5) throw new Error('WxPusher Topic ID 最多支持 5 个。');
+    return unique;
+  }
+  if (items.some((item) => item.length > 256 || /[\r\n]/.test(item))) throw new Error('WxPusher UID 格式无效。');
+  const unique = [...new Set(items)];
+  if (unique.length > 2000) throw new Error('WxPusher UID 最多支持 2000 个。');
+  return unique;
+}
+function wxPusherText(payload) {
+  const clean = (value, max = 300) => String(value || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, max);
+  if (payload.test) return `邮汇 WxPusher 测试通知\n这是一条测试通知，不代表真实新邮件。\n时间：${clean(payload.receivedAt || payload.occurredAt, 80)}`;
+  const sender = [clean(payload.sender?.name, 120), clean(payload.sender?.email, 254)].filter(Boolean).join(' ');
+  const lines = [
+    '邮汇新邮件通知',
+    `邮箱：${clean(payload.account?.email || payload.account?.label, 320) || '未知'}`,
+    `发件人：${sender || '未知'}`,
+    `主题：${clean(payload.subject, 240) || '（无主题）'}`,
+    `时间：${clean(payload.receivedAt || payload.occurredAt, 80) || '未知'}`,
+    ...(payload.verificationCode ? [`验证码：${clean(payload.verificationCode, 32)}`] : [])
+  ];
+  return lines.join('\n').slice(0, 4000);
+}
+function sendWxPusher(config, payload) {
+  const uids = parseWxPusherTargets(config.wxpusherUids, 'uids');
+  const topicIds = parseWxPusherTargets(config.wxpusherTopicIds, 'topicIds');
+  if (!config.wxpusherAppToken || (!uids.length && !topicIds.length)) throw new Error('请配置 WxPusher AppToken，以及至少一个 UID 或 Topic ID。');
+  const body = JSON.stringify({ appToken:config.wxpusherAppToken, content:wxPusherText(payload), contentType:1, ...(uids.length ? { uids } : {}), ...(topicIds.length ? { topicIds } : {}) });
+  return new Promise((resolve, reject) => {
+    const request = https.request('https://wxpusher.zjiecode.com/api/send/message', {
+      method:'POST', headers:{ 'content-type':'application/json; charset=utf-8', 'content-length':Buffer.byteLength(body), 'user-agent':'Youhui-Mail-WxPusher/1.0' },
+      // An explicit ordinary Agent avoids Node 22+ globalAgent proxyEnv from --use-env-proxy.
+      agent:new https.Agent({ keepAlive:false, rejectUnauthorized:true, proxyEnv:null }), rejectUnauthorized:true
+    }, (response) => {
+      let responseBody = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { responseBody += chunk; if (Buffer.byteLength(responseBody) > 65536) response.destroy(Object.assign(new Error('invalid response'), { code:'WXPUSHER_INVALID_RESPONSE' })); });
+      response.on('error', reject);
+      response.on('end', () => {
+        let result;
+        try { result = JSON.parse(responseBody); } catch { reject(Object.assign(new Error('invalid JSON'), { code:'WXPUSHER_INVALID_RESPONSE' })); return; }
+        if (response.statusCode < 200 || response.statusCode >= 300) { const error = new Error('WxPusher HTTP error'); error.webhookStatus = response.statusCode; reject(error); return; }
+        if (Number(result?.code) !== 1000) { const error = new Error('WxPusher rejected task'); error.wxCode = result?.code; reject(error); return; }
+        const targets = Array.isArray(result.data) ? result.data : [];
+        const failed = targets.filter((item) => Number(item?.code) !== 1000);
+        if (failed.length || targets.length === 0) { const error = new Error('WxPusher target acceptance incomplete'); error.wxTargetFailures = failed.length; error.wxTargetTotal = targets.length; reject(error); return; }
+        // API code 1000/target codes indicate task acceptance, not end-user delivery.
+        resolve({ accepted:true, targets });
+      });
+    });
+    request.setTimeout(8000, () => request.destroy(Object.assign(new Error('timeout'), { code:'WEBHOOK_TIMEOUT' })));
+    request.on('error', reject); request.end(body);
+  });
+}
 function deliverWebhook(url, addresses, payload, secret) {
   return new Promise((resolve, reject) => {
-    const body = JSON.stringify(payload);
+    const wecom = isWecomWebhook(url);
+    const body = JSON.stringify(webhookPayload(url, payload));
     const timestamp = String(Math.floor(Date.now() / 1000));
     const headers = { 'content-type':'application/json; charset=utf-8', 'content-length':Buffer.byteLength(body), 'user-agent':'Youhui-Mail-Webhook/1.0', 'x-youhui-event':String(payload.event || 'mail.new'), 'x-youhui-delivery':String(payload.eventId), 'x-youhui-timestamp':timestamp };
     if (secret) headers['x-youhui-signature'] = `sha256=${crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`;
-    const requestOptions = { method:'POST', headers, lookup:makePinnedWebhookLookup(addresses), rejectUnauthorized:true };
+    // The process-wide proxy is restricted to Google OAuth. Webhooks must use
+    // their validated, pinned public addresses directly instead.
+    const requestOptions = { method:'POST', headers, lookup:makePinnedWebhookLookup(addresses), rejectUnauthorized:true, agent:false };
     if (!net.isIP(url.hostname.replace(/^\[|\]$/g, ''))) requestOptions.servername = url.hostname;
     const request = https.request(url, requestOptions, (response) => {
-      response.resume();
-      if (response.statusCode >= 200 && response.statusCode < 300) resolve();
-      else reject(new Error(`HTTP ${response.statusCode || 0}`));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        response.resume();
+        const error = new Error(`HTTP ${response.statusCode || 0}`); error.webhookStatus = response.statusCode; reject(error); return;
+      }
+      if (!wecom) { response.resume(); resolve(); return; }
+      let responseBody = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => {
+        responseBody += chunk;
+        if (Buffer.byteLength(responseBody, 'utf8') > 65536) response.destroy(Object.assign(new Error('invalid response'), { code:'WEBHOOK_INVALID_RESPONSE' }));
+      });
+      response.on('error', reject);
+      response.on('end', () => {
+        try {
+          const result = JSON.parse(responseBody);
+          if (!Number.isInteger(result.errcode)) throw new Error('invalid response');
+          if (result.errcode !== 0) { const error = new Error(`WeCom error ${result.errcode}`); error.wecomCode = result.errcode; reject(error); return; }
+          resolve();
+        } catch { reject(Object.assign(new Error('invalid response'), { code:'WEBHOOK_INVALID_RESPONSE' })); }
+      });
     });
-    request.setTimeout(8000, () => request.destroy(new Error('timeout')));
+    request.setTimeout(8000, () => request.destroy(Object.assign(new Error('timeout'), { code:'WEBHOOK_TIMEOUT' })));
     request.on('error', reject);
     request.end(body);
   });
@@ -908,11 +1091,14 @@ async function scanAccountForNotifications(account, config) {
           }
           const payload = eventPayload(account, item, uid, code);
           const now = Date.now();
-          const result = insertEvent.run(account.id, uid, validity, encrypt(payload), now, config.webhookEnabled && config.webhookUrl ? 1 : 0, now);
+          const result = insertEvent.run(account.id, uid, validity, encrypt(payload), now, config.pushProvider === 'webhook' && config.webhookEnabled && config.webhookUrl ? 1 : 0, now);
           if (result.changes) {
             const eventId = Number(result.lastInsertRowid);
             payload.eventId = eventId;
             updatePayload.run(encrypt(payload), eventId);
+            if (config.pushProvider === 'wxpusher' && config.wxpusherEnabled && config.wxpusherAppToken && (config.wxpusherUids || config.wxpusherTopicIds)) {
+              db.prepare('UPDATE notification_events SET wxpusher_pending=1, wxpusher_next_attempt_at=? WHERE id=?').run(now, eventId);
+            }
             count += 1;
           }
         }
@@ -922,8 +1108,101 @@ async function scanAccountForNotifications(account, config) {
     } finally { try { await client.logout(); } catch {} }
   });
 }
+const notificationIdleMonitors = new Map();
+function mailboxStatus(accountId) {
+  const lastSync = db.prepare('SELECT value FROM app_preferences WHERE key = ?').get(`mailbox_last_sync:${accountId}`)?.value;
+  const monitor = notificationIdleMonitors.get(accountId);
+  return {
+    idleStatus: monitor?.status || 'disabled',
+    idleConnectedAt: monitor?.lastConnectedAt || null,
+    reconnectAt: monitor?.reconnectAt || null,
+    reconnectError: monitor?.reconnectError || '',
+    reconnectAttempts: monitor?.failures || 0,
+    lastSyncAt: lastSync && Number.isFinite(Number(lastSync)) ? Number(lastSync) : null
+  };
+}
+const notificationIdleRenewMs = 25 * 60_000;
+const notificationIdleReconnectBaseMs = 5_000;
+const notificationIdleReconnectMaxMs = 5 * 60_000;
+const notificationIdleStableMs = 5 * 60_000;
+function stopNotificationIdle(accountId) {
+  const monitor = notificationIdleMonitors.get(accountId);
+  if (!monitor) return;
+  monitor.stopped = true;
+  notificationIdleMonitors.delete(accountId);
+  clearTimeout(monitor.reconnectTimer);
+  monitor.reconnectTimer = null;
+  const client = monitor.client;
+  monitor.client = null;
+  if (client) { try { client.close(); } catch {} }
+}
+function scheduleNotificationIdleReconnect(monitor, client, generation, error) {
+  if (notificationIdleMonitors.get(monitor.accountId) !== monitor || monitor.stopped || monitor.generation !== generation || monitor.client !== client || monitor.reconnectTimer) return;
+  if (monitor.connectedAt && Date.now() - monitor.connectedAt >= notificationIdleStableMs) monitor.failures = 0;
+  monitor.connectedAt = 0;
+  monitor.client = null;
+  monitor.status = 'reconnecting';
+  monitor.reconnectError = error ? safeError(error) : (monitor.reconnectError || 'IMAP 连接已关闭。');
+  const delay = Math.min(notificationIdleReconnectBaseMs * (2 ** monitor.failures), notificationIdleReconnectMaxMs);
+  monitor.failures += 1;
+  monitor.reconnectAt = Date.now() + delay;
+  if (error) console.warn(`IMAP IDLE reconnect for account ${monitor.accountId} in ${delay}ms: ${safeError(error)}`);
+  if (client) { try { client.close(); } catch {} }
+  monitor.reconnectTimer = setTimeout(() => {
+    monitor.reconnectTimer = null;
+    void connectNotificationIdle(monitor);
+  }, delay);
+  monitor.reconnectTimer.unref?.();
+}
+async function connectNotificationIdle(monitor) {
+  if (notificationIdleMonitors.get(monitor.accountId) !== monitor || monitor.stopped || monitor.reconnectTimer) return;
+  monitor.status = 'connecting';
+  monitor.reconnectAt = 0;
+  const generation = ++monitor.generation;
+  let client = null;
+  try {
+    const row = db.prepare('SELECT * FROM accounts WHERE id = ?').get(monitor.accountId);
+    if (!row) { stopNotificationIdle(monitor.accountId); return; }
+    const account = mapAccount(row);
+    await withFreshAccount(account, async (fresh) => {
+      if (notificationIdleMonitors.get(monitor.accountId) !== monitor || monitor.stopped || monitor.generation !== generation) return;
+      client = makeImap(fresh, { maxIdleTime: notificationIdleRenewMs });
+      monitor.client = client;
+      client.on('exists', (event) => {
+        if (monitor.client === client && String(event?.path || '').toUpperCase() === 'INBOX') scheduleNotificationSweep(0);
+      });
+      client.on('error', (error) => scheduleNotificationIdleReconnect(monitor, client, generation, error));
+      client.on('close', () => scheduleNotificationIdleReconnect(monitor, client, generation));
+      await client.connect();
+      if (notificationIdleMonitors.get(monitor.accountId) !== monitor || monitor.stopped || monitor.generation !== generation) { try { client.close(); } catch {} return; }
+      await client.mailboxOpen('INBOX', { readOnly: true });
+      if (notificationIdleMonitors.get(monitor.accountId) === monitor && !monitor.stopped && monitor.generation === generation) {
+        monitor.connectedAt = Date.now();
+        monitor.lastConnectedAt = monitor.connectedAt;
+        monitor.status = 'connected';
+        monitor.reconnectError = '';
+        console.log(`IMAP IDLE monitoring enabled for account ${monitor.accountId}`);
+      }
+    });
+  } catch (error) {
+    scheduleNotificationIdleReconnect(monitor, client, generation, error);
+  }
+}
+function reconcileNotificationIdles(config) {
+  const rows = config.enabled ? db.prepare('SELECT id FROM accounts ORDER BY created_at').all() : [];
+  const defaultId = config.enabled ? getDefaultAccountId() : '';
+  const monitored = defaultId ? rows.filter((row) => row.id === defaultId) : rows;
+  const activeIds = new Set(monitored.map((row) => row.id));
+  for (const accountId of notificationIdleMonitors.keys()) if (!activeIds.has(accountId)) stopNotificationIdle(accountId);
+  for (const row of monitored) {
+    if (notificationIdleMonitors.has(row.id)) continue;
+    const monitor = { accountId: row.id, client: null, generation: 0, failures: 0, connectedAt: 0, lastConnectedAt: 0, status: 'connecting', reconnectError: '', reconnectAt: 0, reconnectTimer: null, stopped: false };
+    notificationIdleMonitors.set(row.id, monitor);
+    void connectNotificationIdle(monitor);
+  }
+}
 async function deliverPendingWebhooks(config) {
-  if (!config.webhookEnabled || !config.webhookUrl) return;
+  if (config.pushProvider !== 'webhook' || !config.webhookEnabled || !config.webhookUrl) return;
   const defaultId = getDefaultAccountId();
   const due = defaultId
     ? db.prepare(`SELECT id,payload,webhook_attempts FROM notification_events WHERE webhook_pending=1 AND webhook_abandoned=0 AND webhook_next_attempt_at<=? AND account_id=? ORDER BY id LIMIT 5`).all(Date.now(), defaultId)
@@ -943,15 +1222,41 @@ async function deliverPendingWebhooks(config) {
     }
   }
 }
+async function deliverPendingWxPusher(config) {
+  if (config.pushProvider !== 'wxpusher' || !config.wxpusherEnabled || !config.wxpusherAppToken) return;
+  const defaultId = getDefaultAccountId();
+  const due = defaultId
+    ? db.prepare('SELECT id,payload,wxpusher_attempts FROM notification_events WHERE wxpusher_pending=1 AND wxpusher_abandoned=0 AND wxpusher_next_attempt_at<=? AND account_id=? ORDER BY id LIMIT 5').all(Date.now(), defaultId)
+    : db.prepare('SELECT id,payload,wxpusher_attempts FROM notification_events WHERE wxpusher_pending=1 AND wxpusher_abandoned=0 AND wxpusher_next_attempt_at<=? ORDER BY id LIMIT 5').all(Date.now());
+  for (const row of due) {
+    const attempt = Number(row.wxpusher_attempts) + 1;
+    try {
+      const payload = decrypt(row.payload); payload.eventId = row.id;
+      await sendWxPusher(config, payload);
+      db.prepare('UPDATE notification_events SET wxpusher_pending=0, wxpusher_attempts=?, wxpusher_delivered_at=NULL WHERE id=?').run(attempt, row.id);
+    } catch (error) {
+      // Batch API results and network failures can be ambiguous: never resend accepted targets.
+      db.prepare('UPDATE notification_events SET wxpusher_pending=0, wxpusher_attempts=?, wxpusher_abandoned=1, wxpusher_delivered_at=NULL WHERE id=?').run(attempt, row.id);
+      const summary = Number.isFinite(error?.wxTargetFailures)
+        ? `partial/unknown target acceptance (${error.wxTargetFailures}/${error.wxTargetTotal})`
+        : 'acceptance unknown or rejected';
+      console.warn(`WxPusher delivery ${row.id} stopped without retry: ${summary}`);
+    }
+  }
+}
 let notificationSweepTimer = null;
 let notificationSweepRunning = false;
+let notificationSweepRequested = false;
 function scheduleNotificationSweep(delay = 120_000) {
+  if (notificationSweepRunning) { notificationSweepRequested = true; return; }
   clearTimeout(notificationSweepTimer);
   notificationSweepTimer = setTimeout(async () => {
-    if (notificationSweepRunning) { scheduleNotificationSweep(30_000); return; }
+    notificationSweepTimer = null;
+    if (notificationSweepRunning) { notificationSweepRequested = true; return; }
     notificationSweepRunning = true;
     try {
       const config = getNotificationConfig();
+      reconcileNotificationIdles(config);
       if (config.enabled) {
         db.prepare('DELETE FROM notification_events WHERE created_at < ?').run(Date.now() - 7 * 24 * 60 * 60_000);
         const accounts = db.prepare('SELECT * FROM accounts ORDER BY created_at').all().map(mapAccount);
@@ -962,19 +1267,22 @@ function scheduleNotificationSweep(delay = 120_000) {
           catch (error) { console.warn(`New-mail scan skipped for account ${account.id}: ${safeError(error)}`); }
         }
         await deliverPendingWebhooks(config);
+        await deliverPendingWxPusher(config);
       }
     } catch (error) { console.warn('New-mail notification sweep failed:', safeError(error)); }
     finally {
       notificationSweepRunning = false;
+      const rerun = notificationSweepRequested;
+      notificationSweepRequested = false;
       const config = getNotificationConfig();
-      scheduleNotificationSweep(config.enabled ? config.intervalSeconds * 1000 : 10 * 60_000);
+      scheduleNotificationSweep(rerun ? 0 : config.enabled ? config.intervalSeconds * 1000 : 10 * 60_000);
     }
   }, Math.max(0, delay));
   notificationSweepTimer.unref?.();
 }
 app.get('/api/accounts', auth, (req, res) => {
   const rows = db.prepare('SELECT * FROM accounts ORDER BY created_at').all();
-  res.json({ accounts: rows.map(accountSummary), oauthProviders: publicOAuthProviders(), defaultAccountId: getDefaultAccountId() });
+  res.json({ accounts: rows.map((row) => ({ ...accountSummary(row), mailStatus: mailboxStatus(row.id) })), oauthProviders: publicOAuthProviders(), defaultAccountId: getDefaultAccountId() });
 });
 app.put('/api/preferences/default-account', auth, (req, res) => {
   const accountId = String(req.body?.accountId || '').trim();
@@ -984,6 +1292,7 @@ app.put('/api/preferences/default-account', auth, (req, res) => {
   db.prepare(`INSERT INTO app_preferences (key, value) VALUES ('default_account_id', ?)
     ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(accountId);
   if (accountId) db.prepare('UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1 AND account_id<>?').run(accountId);
+  if (accountId) db.prepare('UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1 AND account_id<>?').run(accountId);
   scheduleNotificationSweep(0);
   res.json({ defaultAccountId: accountId });
 });
@@ -991,26 +1300,61 @@ app.get('/api/notifications/config', auth, (req, res) => res.json(publicNotifica
 app.put('/api/notifications/config', auth, async (req, res) => {
   try {
     const previous = getNotificationConfig();
-    const enabled = req.body?.enabled !== false;
-    const intervalSeconds = Number(req.body?.intervalSeconds);
+    const pushProvider = req.body?.pushProvider === undefined ? previous.pushProvider : String(req.body.pushProvider);
+    if (!['webhook', 'wxpusher'].includes(pushProvider)) return res.status(400).json({ error:'推送类型须为 webhook 或 wxpusher。' });
+    const enabled = req.body?.enabled === undefined ? previous.enabled : req.body.enabled !== false;
+    const intervalSeconds = req.body?.intervalSeconds === undefined ? previous.intervalSeconds : Number(req.body.intervalSeconds);
     if (!notificationIntervals.has(intervalSeconds)) return res.status(400).json({ error:'请选择支持的检查间隔。' });
-    const webhookEnabled = req.body?.webhookEnabled === true;
+    const webhookEnabled = req.body?.webhookEnabled === undefined ? previous.webhookEnabled : req.body.webhookEnabled === true;
     const submittedUrl = String(req.body?.webhookUrl || '').trim();
     const webhookUrl = submittedUrl || previous.webhookUrl;
     const submittedSecret = String(req.body?.webhookSecret || '').trim();
     if (submittedSecret.length > 4096) return res.status(400).json({ error:'Webhook 签名密钥不能超过 4096 个字符。' });
     const webhookSecret = submittedSecret || previous.webhookSecret;
+    const wxpusherEnabled = req.body?.wxpusherEnabled === undefined ? previous.wxpusherEnabled : req.body.wxpusherEnabled === true;
+    const submittedAppToken = String(req.body?.wxpusherAppToken || '').trim();
+    if (submittedAppToken.length > 4096) return res.status(400).json({ error:'WxPusher AppToken 不能超过 4096 个字符。' });
+    const wxpusherAppToken = submittedAppToken || previous.wxpusherAppToken;
+    const wxpusherUids = req.body?.wxpusherUids === undefined ? previous.wxpusherUids : String(req.body.wxpusherUids || '').trim();
+    const wxpusherTopicIds = req.body?.wxpusherTopicIds === undefined ? previous.wxpusherTopicIds : String(req.body.wxpusherTopicIds || '').trim();
+    if (wxpusherUids.length > 10000 || wxpusherTopicIds.length > 10000) return res.status(400).json({ error:'WxPusher 接收目标内容过长。' });
+    parseWxPusherTargets(wxpusherUids, 'uids');
+    parseWxPusherTargets(wxpusherTopicIds, 'topicIds');
     if (webhookEnabled && !webhookUrl) return res.status(400).json({ error:'启用 Webhook 前，请填写 Webhook HTTPS 地址。' });
     if (submittedUrl) await validateWebhookUrl(submittedUrl);
-    const config = { enabled, intervalSeconds, webhookEnabled, webhookUrl, webhookSecret };
+    if (wxpusherEnabled && (!wxpusherAppToken || (!wxpusherUids && !wxpusherTopicIds))) return res.status(400).json({ error:'启用 WxPusher 前，请填写 AppToken 及至少一个 UID 或 Topic ID。' });
+    const config = { ...previous, enabled, intervalSeconds, webhookEnabled, webhookUrl, webhookSecret, pushProvider, wxpusherEnabled, wxpusherAppToken, wxpusherUids, wxpusherTopicIds };
     db.prepare(`INSERT INTO app_preferences (key,value) VALUES ('notification_config',?)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(encrypt(config));
     if ((previous.webhookEnabled && !webhookEnabled) || (previous.enabled && !enabled)) {
       db.prepare('UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1').run();
     }
+    if ((previous.wxpusherEnabled && (!wxpusherEnabled || previous.wxpusherUids !== wxpusherUids || previous.wxpusherTopicIds !== wxpusherTopicIds || previous.wxpusherAppToken !== wxpusherAppToken)) || (previous.enabled && !enabled)) {
+      db.prepare('UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1').run();
+    }
+    if (previous.pushProvider !== pushProvider) {
+      db.prepare('UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1').run();
+      db.prepare('UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1').run();
+    }
     scheduleNotificationSweep(0);
     res.json(publicNotificationConfig(config));
   } catch (error) { res.status(400).json({ error:safeError(error) }); }
+});
+app.post('/api/notifications/wxpusher/test', auth, async (req, res) => {
+  const config = getNotificationConfig();
+  if (!config.wxpusherAppToken) return res.status(400).json({ error:'请先保存 WxPusher AppToken，再进行测试。' });
+  try {
+    const now = new Date().toISOString();
+    const result = await sendWxPusher(config, {
+      test:true, event:'wxpusher.test', occurredAt:now, receivedAt:now,
+      account:{ label:'邮汇工作台测试', email:'' }, sender:{ name:'邮汇工作台', email:'' },
+      subject:'WxPusher 测试通知', verificationCode:null
+    });
+    res.json({ ok:true, accepted:true, code:1000, targetResults:result.targets, message:'WxPusher 已接受推送任务；这不代表最终送达。' });
+  } catch (error) {
+    const partial = Number(error?.wxTargetFailures) > 0;
+    res.status(502).json({ error:partial ? `WxPusher 对部分目标的受理结果不完整（${error.wxTargetFailures}/${error.wxTargetTotal} 个目标报告失败）；为避免重复，本次不自动重试。` : 'WxPusher 推送任务受理失败或结果不确定；为避免重复，本次不自动重试。', ...(Number.isFinite(error?.wxTargetFailures) ? { targetFailures:error.wxTargetFailures, targetTotal:error.wxTargetTotal } : {}) });
+  }
 });
 app.post('/api/notifications/webhook/test', auth, async (req, res) => {
   const config = getNotificationConfig();
@@ -1026,8 +1370,8 @@ app.post('/api/notifications/webhook/test', auth, async (req, res) => {
     };
     await deliverWebhook(url, addresses, payload, config.webhookSecret);
     res.json({ ok:true, message:'测试通知已成功发送。' });
-  } catch {
-    res.status(502).json({ error:'测试通知未送达，请检查已保存的 Webhook 地址与服务响应。' });
+  } catch (error) {
+    res.status(502).json({ error:webhookFailureMessage(error) });
   }
 });
 app.delete('/api/notifications/webhook', auth, (req, res) => {
@@ -1051,6 +1395,222 @@ app.get('/api/notifications/events', auth, (req, res) => {
   const cursor = rows.length ? Number(rows.at(-1).id) : maximum;
   res.json({ events:rows.map((row) => ({ id:Number(row.id), ...decrypt(row.payload) })), cursor, defaultAccountId:defaultId });
 });
+function backupTableNames(database) {
+  return database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map((row) => row.name);
+}
+function backupTableColumns(database, tableName) {
+  const quoted = `"${String(tableName).replaceAll('"', '""')}"`;
+  return database.prepare(`PRAGMA table_info(${quoted})`).all().map((column) => ({ name: column.name, type: column.type, notnull: column.notnull, pk: column.pk }));
+}
+function verifyBackupDatabase(database, key) {
+  const integrity = database.pragma('integrity_check');
+  if (integrity.length !== 1 || Object.values(integrity[0])[0] !== 'ok') throw new Error('备份数据库完整性检查失败。');
+  const required = ['accounts', 'app_config', 'app_preferences', 'ai_config', 'translation_config', 'ai_digests', 'ai_digest_runs'];
+  const sourceTables = backupTableNames(database);
+  if (required.some((table) => !sourceTables.includes(table)) || !database.prepare('SELECT id FROM app_config WHERE id = 1').get()) {
+    throw new Error('备份文件与当前邮汇版本不兼容或未完成首次设置。');
+  }
+  const foreignKeyErrors = database.pragma('foreign_key_check');
+  if (foreignKeyErrors.length) throw new Error('备份数据库的关联完整性检查失败。');
+  for (const row of database.prepare('SELECT credentials FROM accounts').all()) decryptWithKey(row.credentials, key);
+  for (const row of database.prepare("SELECT value FROM app_preferences WHERE key IN ('oauth_client_config','notification_config')").all()) decryptWithKey(row.value, key);
+  for (const row of database.prepare('SELECT profile FROM login_identities').all()) decryptWithKey(row.profile, key);
+  for (const row of database.prepare('SELECT payload FROM notification_events').all()) decryptWithKey(row.payload, key);
+  for (const row of database.prepare('SELECT config FROM ai_config').all()) decryptWithKey(row.config, key);
+  for (const row of database.prepare('SELECT config FROM translation_config').all()) decryptWithKey(row.config, key);
+  for (const row of database.prepare('SELECT payload FROM ai_digests').all()) decryptWithKey(row.payload, key);
+  return sourceTables;
+}
+function parsePlainBackupFile(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < BACKUP_MAGIC.length + 2 || buffer.length > BACKUP_MAX_BYTES) {
+    throw new Error('备份文件为空、过大或格式无效（最大 250 MB）。');
+  }
+  if (!buffer.subarray(0, BACKUP_MAGIC.length).equals(BACKUP_MAGIC)) throw new Error('这不是有效的邮汇备份文件。');
+  const headerEnd = buffer.indexOf(0x0a, BACKUP_MAGIC.length);
+  if (headerEnd < 0 || headerEnd - BACKUP_MAGIC.length > 4096) throw new Error('备份文件头无效。');
+  let header;
+  try { header = JSON.parse(buffer.subarray(BACKUP_MAGIC.length, headerEnd).toString('utf8')); }
+  catch { throw new Error('备份文件头无法读取。'); }
+  const key = Buffer.from(String(header.encryptionKey || ''), 'base64');
+  const databaseBytes = buffer.subarray(headerEnd + 1);
+  if (header.version !== 1 || key.length !== 32 || key.toString('base64') !== header.encryptionKey ||
+      !Number.isSafeInteger(header.databaseBytes) || header.databaseBytes !== databaseBytes.length ||
+      databaseBytes.length < 100 || databaseBytes.length > BACKUP_MAX_BYTES ||
+      !/^[a-f0-9]{64}$/.test(String(header.databaseSha256 || '')) ||
+      crypto.createHash('sha256').update(databaseBytes).digest('hex') !== header.databaseSha256) {
+    throw new Error('备份文件不完整、已损坏或版本不受支持。');
+  }
+  return { key, databaseBytes };
+}
+function encryptBackupFile(payload, passphrase) {
+  const password = String(passphrase || '');
+  if (password.length < 12 || password.length > 1024) throw new Error('加密备份密码须为 12 到 1024 个字符。');
+  const salt = crypto.randomBytes(16);
+  const iv = crypto.randomBytes(12);
+  const key = crypto.scryptSync(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(payload), cipher.final()]);
+  const header = Buffer.from(JSON.stringify({
+    version: 1, kdf: 'scrypt', n: 32768, r: 8, p: 1,
+    salt: salt.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'),
+    ciphertextBytes: ciphertext.length, ciphertextSha256: crypto.createHash('sha256').update(ciphertext).digest('hex')
+  }), 'utf8');
+  return Buffer.concat([BACKUP_ENCRYPTED_MAGIC, header, Buffer.from('\n'), ciphertext]);
+}
+function parseBackupFile(buffer, passphrase = '') {
+  if (Buffer.isBuffer(buffer) && buffer.subarray(0, BACKUP_ENCRYPTED_MAGIC.length).equals(BACKUP_ENCRYPTED_MAGIC)) {
+    if (buffer.length > BACKUP_MAX_BYTES) throw new Error('加密备份文件超过 250 MB 上限。');
+    const headerEnd = buffer.indexOf(0x0a, BACKUP_ENCRYPTED_MAGIC.length);
+    if (headerEnd < 0 || headerEnd - BACKUP_ENCRYPTED_MAGIC.length > 4096) throw new Error('加密备份文件头无效。');
+    let header;
+    try { header = JSON.parse(buffer.subarray(BACKUP_ENCRYPTED_MAGIC.length, headerEnd).toString('utf8')); }
+    catch { throw new Error('加密备份文件头无法读取。'); }
+    const ciphertext = buffer.subarray(headerEnd + 1);
+    const salt = Buffer.from(String(header.salt || ''), 'base64');
+    const iv = Buffer.from(String(header.iv || ''), 'base64');
+    const tag = Buffer.from(String(header.tag || ''), 'base64');
+    if (header.version !== 1 || header.kdf !== 'scrypt' || header.n !== 32768 || header.r !== 8 || header.p !== 1 ||
+        salt.length !== 16 || iv.length !== 12 || tag.length !== 16 ||
+        !Number.isSafeInteger(header.ciphertextBytes) || header.ciphertextBytes !== ciphertext.length || ciphertext.length < 100 ||
+        !/^[a-f0-9]{64}$/.test(String(header.ciphertextSha256 || '')) ||
+        crypto.createHash('sha256').update(ciphertext).digest('hex') !== header.ciphertextSha256) {
+      throw new Error('加密备份不完整、已损坏或版本不受支持。');
+    }
+    const password = String(passphrase || '');
+    if (password.length < 12 || password.length > 1024) throw new Error('请输入创建此加密备份时设置的密码（至少 12 个字符）。');
+    try {
+      const key = crypto.scryptSync(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
+      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAuthTag(tag);
+      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      return parsePlainBackupFile(plaintext);
+    } catch { throw new Error('加密备份密码不正确，或文件已损坏。'); }
+  }
+  return parsePlainBackupFile(buffer);
+}
+async function exportBackup(req, res, encrypted, passphrase) {
+  const temporaryDirectory = fs.mkdtempSync(path.join(DATA_DIR, '.backup-export-'));
+  const snapshotPath = path.join(temporaryDirectory, 'mail.sqlite');
+  try {
+    await db.backup(snapshotPath);
+    const snapshot = new Database(snapshotPath);
+    try {
+      snapshot.transaction(() => {
+        snapshot.exec('DELETE FROM sessions; DELETE FROM oauth_states; DELETE FROM identity_oauth_states;');
+        snapshot.exec('DELETE FROM ai_digest_runs; UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1; UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1;');
+        snapshot.prepare('DELETE FROM app_preferences WHERE key = ?').run('__system_restore_tx');
+      })();
+    } finally { snapshot.close(); }
+    const databaseBytes = fs.readFileSync(snapshotPath);
+    if (databaseBytes.length > BACKUP_MAX_BYTES - 8192) return res.status(413).json({ error: '数据库超过 250 MB，暂时无法通过浏览器导出。' });
+    const header = Buffer.from(JSON.stringify({ version: 1, createdAt: new Date().toISOString(), encryptionKey: ENCRYPTION_KEY.toString('base64'), databaseBytes: databaseBytes.length, databaseSha256: crypto.createHash('sha256').update(databaseBytes).digest('hex') }), 'utf8');
+    const plainPayload = Buffer.concat([BACKUP_MAGIC, header, Buffer.from('\n'), databaseBytes]);
+    const payload = encrypted ? encryptBackupFile(plainPayload, passphrase) : plainPayload;
+    if (payload.length > BACKUP_MAX_BYTES) return res.status(413).json({ error: '备份超过 250 MB 上限，暂时无法通过浏览器导出。' });
+    const filename = `youhui-backup-${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)}${encrypted ? '-encrypted' : ''}.yhbackup`;
+    res.setHeader('Content-Type', 'application/vnd.youhui-mail.backup');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', String(payload.length));
+    res.setHeader('X-Backup-Encrypted', encrypted ? 'true' : 'false');
+    res.setHeader('Cache-Control', 'no-store, private, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.send(payload);
+  } catch (error) {
+    if (!res.headersSent) res.status(500).json({ error: '无法生成备份，请稍后重试。' });
+  } finally {
+    try { fs.rmSync(temporaryDirectory, { recursive: true, force: true }); } catch {}
+  }
+}
+app.get('/api/backup/export', auth, (req, res) => exportBackup(req, res, false, ''));
+app.post('/api/backup/export', auth, (req, res) => {
+  const encrypted = req.body?.encrypted === true;
+  const passphrase = String(req.body?.passphrase || '');
+  if (encrypted && (passphrase.length < 12 || passphrase.length > 1024)) return res.status(400).json({ error: '加密备份密码须为 12 到 1024 个字符。' });
+  return exportBackup(req, res, encrypted, passphrase);
+});
+app.post('/api/backup/restore', auth, express.raw({ type: 'application/octet-stream', limit: '250mb' }), (req, res) => {
+  let temporaryDirectory = '';
+  let pendingWritten = false;
+  let restoreCommitted = false;
+  try {
+    const encodedPassphrase = String(req.get('x-backup-passphrase') || '');
+    let passphrase = '';
+    try { passphrase = decodeURIComponent(encodedPassphrase); }
+    catch { return res.status(400).json({ error: '加密备份密码编码无效。' }); }
+    const { key: restoredKey, databaseBytes } = parseBackupFile(req.body, passphrase);
+    temporaryDirectory = fs.mkdtempSync(path.join(DATA_DIR, '.backup-restore-'));
+    const candidatePath = path.join(temporaryDirectory, 'mail.sqlite');
+    writePrivateFile(candidatePath, databaseBytes);
+    const candidate = new Database(candidatePath, { readonly: true, fileMustExist: true });
+    let sourceTables;
+    let restoreSourceColumns = new Map();
+    const destinationTables = backupTableNames(db);
+    try {
+      sourceTables = verifyBackupDatabase(candidate, restoredKey);
+      if (JSON.stringify(sourceTables) !== JSON.stringify(destinationTables)) throw new Error('备份文件与当前邮汇版本的数据库结构不一致。');
+      for (const tableName of destinationTables) {
+        if (tableName !== 'notification_events' && JSON.stringify(backupTableColumns(db, tableName)) !== JSON.stringify(backupTableColumns(candidate, tableName))) {
+          throw new Error('备份文件的数据库结构与当前版本不兼容。');
+        }
+        if (tableName === 'notification_events') {
+          const sourceColumns = backupTableColumns(candidate, tableName);
+          restoreSourceColumns.set(tableName, sourceColumns);
+          const destinationColumns = new Set(backupTableColumns(db, tableName).map((column) => column.name));
+          for (const column of ['id','account_id','message_uid','uid_validity','folder','payload','created_at']) {
+            if (!sourceColumns.some((item) => item.name === column) || !destinationColumns.has(column)) throw new Error('备份文件的通知事件表缺少必要字段。');
+          }
+        }
+      }
+    }
+    finally { candidate.close(); }
+    const transactionId = crypto.randomUUID();
+    writePrivateFile(RESTORE_PENDING_PATH, JSON.stringify({ id: transactionId, oldKey: ENCRYPTION_KEY.toString('base64'), newKey: restoredKey.toString('base64') }));
+    pendingWritten = true;
+    restoreInProgress = true;
+    db.prepare('ATTACH DATABASE ? AS restore_source').run(candidatePath);
+    const transientTables = new Set(['sessions', 'oauth_states', 'identity_oauth_states', 'ai_digest_runs']);
+    const quote = (name) => `"${String(name).replaceAll('"', '""')}"`;
+    try {
+      db.transaction(() => {
+        for (const tableName of destinationTables) db.exec(`DELETE FROM main.${quote(tableName)}`);
+        for (const tableName of destinationTables) {
+          if (transientTables.has(tableName)) continue;
+          const destinationColumns = backupTableColumns(db, tableName);
+          const sourceNames = new Set((restoreSourceColumns.get(tableName) || []).map((column) => column.name));
+          const columns = (tableName === 'notification_events'
+            ? destinationColumns.filter((column) => sourceNames.has(column.name))
+            : destinationColumns).map((column) => quote(column.name)).join(',');
+          const filter = tableName === 'app_preferences' ? " WHERE key <> '__system_restore_tx'" : '';
+          db.exec(`INSERT INTO main.${quote(tableName)} (${columns}) SELECT ${columns} FROM restore_source.${quote(tableName)}${filter}`);
+        }
+        db.prepare('UPDATE main.notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1').run();
+        db.prepare('UPDATE main.notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1').run();
+        db.prepare('INSERT INTO main.app_preferences (key,value) VALUES (?,?)').run('__system_restore_tx', transactionId);
+      }).immediate();
+      restoreCommitted = true;
+    } finally {
+      try { db.prepare('DETACH DATABASE restore_source').run(); } catch {}
+    }
+    ENCRYPTION_KEY = restoredKey;
+    let keySaved = false;
+    try { writePrivateFile(KEY_PATH, restoredKey); keySaved = true; } catch {}
+    if (keySaved) {
+      try { fs.rmSync(RESTORE_PENDING_PATH, { force: true }); } catch {}
+      try { db.prepare('DELETE FROM app_preferences WHERE key = ?').run('__system_restore_tx'); } catch {}
+    }
+    clearSessionCookie(res, req);
+    res.setHeader('Cache-Control', 'no-store, private, max-age=0');
+    res.json({ ok: true, message: '备份已恢复，所有登录会话已退出。请使用该备份创建时的工作台密码重新登录。' });
+  } catch (error) {
+    if (!restoreCommitted && pendingWritten) {
+      try { fs.rmSync(RESTORE_PENDING_PATH, { force: true }); } catch {}
+    }
+    if (!res.headersSent) res.status(400).json({ error: error instanceof Error ? error.message : '备份文件无法恢复。' });
+  } finally {
+    restoreInProgress = false;
+    if (temporaryDirectory) { try { fs.rmSync(temporaryDirectory, { recursive: true, force: true }); } catch {} }
+  }
+});
 app.get('/api/presets', auth, (req, res) => res.json({ presets }));
 app.post('/api/accounts/test', auth, async (req, res) => {
   try { const account = normalizeManual(req.body || {}); await verifyAccount(account); res.json({ ok: true, message: 'IMAP 收信与 SMTP 发信连接均已验证。' }); }
@@ -1070,6 +1630,7 @@ app.delete('/api/accounts/:id', auth, (req, res) => {
   db.prepare('DELETE FROM app_preferences WHERE key = ? AND value = ?').run('default_account_id', req.params.id);
   db.prepare('DELETE FROM notification_checkpoints WHERE account_id=?').run(req.params.id);
   db.prepare('DELETE FROM notification_events WHERE account_id=?').run(req.params.id);
+  scheduleNotificationSweep(0);
   res.json({ ok: true });
 });
 app.get('/api/folders', auth, async (req, res) => {
@@ -1184,6 +1745,35 @@ app.post('/api/send', auth, async (req, res) => {
     res.json({ ok: true, sentCopySaved: sendResult.sentCopySaved, message: '邮件已发送。', warning: sendResult.sentCopySaved ? '' : '邮件已发送，但此邮箱的“已发送”副本未能自动保存。' });
   } catch (error) { res.status(400).json({ error: safeError(error) }); }
 });
+
+async function sendMcpMail(account, { to, cc = '', bcc = '', subject = '', text = '' }) {
+  return withFreshAccount(account, async (fresh) => {
+    const messageId = `<${crypto.randomUUID()}@${fresh.email.split('@').at(-1)}>`;
+    const transport = makeSmtp(fresh);
+    try {
+      await transport.sendMail({
+        from: { name: fresh.label, address: fresh.email }, to, cc, bcc,
+        subject, text, messageId
+      });
+    } finally { transport.close(); }
+    let sentCopySaved = false;
+    const imap = makeImap(fresh);
+    try {
+      await imap.connect();
+      const sentFolder = findFolder(await imap.list(), 'Sent');
+      if (sentFolder) {
+        const source = rawSentMessage({ email: fresh.email, label: fresh.label, to, cc, subject, text, messageId });
+        await imap.append(sentFolder, source, ['\\Seen']);
+        sentCopySaved = true;
+      }
+    } catch (error) { console.error('MCP sent copy save:', safeError(error)); }
+    finally { try { await imap.logout(); } catch {} }
+    return {
+      ok: true, sentCopySaved, message: '邮件已发送。',
+      warning: sentCopySaved ? '' : '邮件已发送，但此邮箱的“已发送”副本未能自动保存。'
+    };
+  });
+}
 
 app.get('/api/identity/:provider/start', (req, res, next) => {
   if (req.query.flow === 'bind') return auth(req, res, next);
@@ -1315,10 +1905,12 @@ app.get('/api/oauth/:provider/start', auth, (req, res) => {
   res.json({ url: url.toString() });
 });
 attachAI({ app, auth, db, encrypt, decrypt, mapAccount, withFreshAccount, makeImap, simpleParser });
+attachMcp({ app, auth, db, hash, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage: sendMcpMail, safeError });
 app.get('*path', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((error, req, res, next) => {
   console.error(error);
   if (res.headersSent) return next(error);
+  if (error?.status === 413 || error?.type === 'entity.too.large') return res.status(413).json({ error: '备份文件超过 250 MB 上限。' });
   res.status(500).json({ error: '服务器遇到问题，请稍后重试。' });
 });
 

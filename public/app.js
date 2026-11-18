@@ -1,7 +1,7 @@
 const state = {
   status: null, accounts: [], defaultAccountId: '', folders: [], folder: 'INBOX', accountId: 'all', page: 1, query: '',
   messages: [], total: 0, selected: null, detail: null, olderFirst: false, busy: false, searchTimer: null,
-  aiConfig: null, translationConfig: null, notificationConfig: null, oauthConfig: null, aiMessages: [], aiContext: null, aiBusy: false
+  aiConfig: null, translationConfig: null, notificationConfig: null, oauthConfig: null, mcpConfig: null, aiMessages: [], aiContext: null, aiBusy: false
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -18,7 +18,13 @@ let composeFiles = [];
 let composeReplyMeta = null;
 let notificationPollTimer = null;
 let notificationPollInFlight = false;
-
+let mcpApprovalPollTimer = null;
+let mcpApprovalPollInFlight = false;
+let mailboxStatusLastPoll = 0;
+let mailboxStatusPollTimer = null;
+let mailboxStatusPollInFlight = false;
+let mcpApprovals = [];
+let mcpTokenRevealPermission = '';
 async function api(url, options = {}) {
   const response = await fetch(url, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) } });
   const data = await response.json().catch(() => ({}));
@@ -77,7 +83,10 @@ function formatSize(bytes) {
   return `${(bytes/1048576).toFixed(1)} MB`;
 }
 function showAuth() {
+  clearMcpTokenReveal();
   stopNotificationPolling();
+  stopMcpApprovalPolling();
+  stopMailboxStatusPolling();
   $('#appView').classList.add('hidden'); $('#authView').classList.remove('hidden');
   const needsSetup = state.status?.setupRequired;
   $('#authTitle').textContent = needsSetup ? '创建你的私人工作台' : '欢迎回来';
@@ -128,6 +137,28 @@ async function showApp() {
   $('#authView').classList.add('hidden'); $('#appView').classList.remove('hidden');
   await loadAccounts(); await loadFolders(); await loadMessages(); await loadAIConfig(); await loadTranslationConfig(); await loadNotificationConfig(); await loadOAuthConfig();
   startNotificationPolling();
+  startMcpApprovalPolling();
+  startMailboxStatusPolling();
+}
+async function refreshMailboxStatuses() {
+  if (mailboxStatusPollInFlight || $('#appView').classList.contains('hidden')) return;
+  mailboxStatusPollInFlight = true;
+  try {
+    const data = await api('/api/accounts');
+    state.accounts = Array.isArray(data.accounts) ? data.accounts : [];
+    if ($('#settingsDialog')?.open && !$('#settingsPanelAccounts').classList.contains('hidden')) renderManagedAccounts();
+  } catch {}
+  finally { mailboxStatusPollInFlight = false; }
+}
+function startMailboxStatusPolling() {
+  stopMailboxStatusPolling();
+  mailboxStatusPollTimer = setInterval(() => {
+    if ($('#settingsDialog')?.open && !$('#settingsPanelAccounts').classList.contains('hidden')) void refreshMailboxStatuses();
+  }, 15_000);
+}
+function stopMailboxStatusPolling() {
+  if (mailboxStatusPollTimer) clearInterval(mailboxStatusPollTimer);
+  mailboxStatusPollTimer = null; mailboxStatusPollInFlight = false;
 }
 async function loadAccounts() {
   try {
@@ -135,6 +166,7 @@ async function loadAccounts() {
     if (state.defaultAccountId && state.accounts.some((account) => account.id === state.defaultAccountId)) state.accountId = state.defaultAccountId;
     else if (!state.accounts.some((account) => account.id === state.accountId)) state.accountId = 'all';
     renderAccountNav(); renderAccountFilter(); renderComposeAccounts(); renderDefaultMailbox(); updateNotificationScopeNote();
+    if ($('#settingsDialog')?.open) renderManagedAccounts();
   } catch (error) { toast(error.message, true); }
 }
 async function loadFolders() {
@@ -272,7 +304,7 @@ function renderDetail(detail, message) {
   </article>`;
   const body = $('#mailBody', pane);
   if (detail.html) {
-    const iframe = document.createElement('iframe'); iframe.setAttribute('sandbox',''); iframe.setAttribute('title','邮件 HTML 内容');
+    const iframe = document.createElement('iframe'); iframe.setAttribute('sandbox','allow-popups allow-popups-to-escape-sandbox'); iframe.setAttribute('title','邮件 HTML 内容');
     const makeDocument = (html) => `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:14px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#405158;overflow-wrap:anywhere}a{color:#188779}table{max-width:100%;border-collapse:collapse}td,th{padding:5px;border:1px solid #e8eded}img{max-width:100%;height:auto}</style></head><body>${html}</body></html>`;
     const remoteImageCount = (String(detail.html).match(/\bdata-external-src=/gi) || []).length;
     iframe.srcdoc = makeDocument(detail.html);
@@ -449,7 +481,7 @@ $('#googleOAuthButton').addEventListener('click',()=>startOAuth('google'));
 $('#microsoftOAuthButton').addEventListener('click',()=>startOAuth('microsoft'));
 
 function setSettingsTab(name = 'accounts') {
-  const selected = ['accounts', 'ai', 'translation', 'notifications', 'oauth'].includes(name) ? name : 'accounts';
+  const selected = ['accounts', 'ai', 'translation', 'notifications', 'oauth', 'mcp', 'backup'].includes(name) ? name : 'accounts';
   $$('[data-settings-tab]').forEach((button) => {
     const active = button.dataset.settingsTab === selected;
     button.classList.toggle('active', active); button.setAttribute('aria-selected', String(active));
@@ -463,13 +495,15 @@ async function openSettings(tab = 'accounts') {
     if (!state.translationConfig) await loadTranslationConfig();
     if (!state.notificationConfig) await loadNotificationConfig();
     if (!state.oauthConfig) await loadOAuthConfig();
+    await refreshMailboxStatuses();
     await renderManagedAccounts();
     fillAISettingsForm(); fillTranslationSettingsForm(); fillNotificationSettingsForm(); fillOAuthSettingsForm();
     dialog.showModal();
   }
   setSettingsTab(tab);
+  if (tab === 'mcp') await loadMcpConfig();
 }
-$$('[data-settings-tab]').forEach((button) => button.addEventListener('click', () => setSettingsTab(button.dataset.settingsTab)));
+$$('[data-settings-tab]').forEach((button) => button.addEventListener('click', () => { setSettingsTab(button.dataset.settingsTab); if (button.dataset.settingsTab === 'mcp') { void loadMcpConfig(); } else if (button.dataset.settingsTab === 'accounts') { void refreshMailboxStatuses(); } }));
 $('#manageAccountsButton').addEventListener('click', () => { void openSettings('accounts'); });
 $('#settingsAddButton').addEventListener('click',()=>{ $('#settingsDialog').close(); openAccountDialog(); });
 $('#saveDefaultMailbox').addEventListener('click', async () => {
@@ -490,7 +524,13 @@ $('#saveDefaultMailbox').addEventListener('click', async () => {
 async function renderManagedAccounts() {
   const root=$('#managedAccounts');
   if(!state.accounts.length){ root.innerHTML='<div class="settings-empty">尚未连接邮箱账户。</div>';return; }
-  root.innerHTML=state.accounts.map(a=>`<div class="managed-account">${accountProviderIcon(a)}<div class="managed-main"><strong>${escapeHtml(a.label||a.email)}</strong><span>${escapeHtml(a.email)} · ${a.authType==='oauth'?'OAuth 安全授权':'IMAP / SMTP'}</span></div><span class="managed-badge">已连接</span><button class="remove-account" data-remove="${escapeHtml(a.id)}" title="移除此账户" aria-label="移除此账户">×</button></div>`).join('');
+  root.innerHTML=state.accounts.map(a=>{
+    const status=a.mailStatus||{};
+    const idleLabel=({connected:'已连接',connecting:'连接中',reconnecting:'重连中',disabled:'未启用'})[status.idleStatus]||'状态未知';
+    const lastSync=status.lastSyncAt?dateLong(status.lastSyncAt):'尚无成功同步';
+    const reconnectError=status.reconnectError?`<span class="managed-sync-error">重连错误：${escapeHtml(status.reconnectError)}</span>`:'';
+    return `<div class="managed-account">${accountProviderIcon(a)}<div class="managed-main"><strong>${escapeHtml(a.label||a.email)}</strong><span>${escapeHtml(a.email)} · ${a.authType==='oauth'?'OAuth 安全授权':'IMAP / SMTP'}</span><span class="managed-sync-info">IMAP / IDLE：${idleLabel} · 最近成功同步：${escapeHtml(lastSync)}${status.reconnectAttempts?` · 重连 ${Number(status.reconnectAttempts)} 次`:''}</span>${reconnectError}</div><span class="managed-badge">已连接</span><button class="remove-account" data-remove="${escapeHtml(a.id)}" title="移除此账户" aria-label="移除此账户">×</button></div>`;
+  }).join('');
   $$('[data-remove]',root).forEach(button=>button.addEventListener('click',async()=>{
     const account=state.accounts.find(a=>a.id===button.dataset.remove); if(!account)return;
     if(!await askConfirm('移除此邮箱账户？',`将从邮汇中移除 ${account.email} 的连接凭据。服务器上的邮件不会被删除。`, '移除账户', true))return;
@@ -505,8 +545,87 @@ function askConfirm(title,copy,acceptLabel='确认',danger=false){
 }
 $('#confirmCancel').addEventListener('click',()=>{if(confirmResolver)confirmResolver(false);confirmResolver=null;$('#confirmDialog').close();});
 $('#confirmAccept').addEventListener('click',()=>{if(confirmResolver)confirmResolver(true);confirmResolver=null;$('#confirmDialog').close();});
+$('#confirmDialog').addEventListener('close',()=>{if(confirmResolver)confirmResolver(false);confirmResolver=null;});
+function backupStatus(message, isError = false) {
+  const status = $('#backupSettingsStatus');
+  status.textContent = message; status.classList.toggle('error', isError);
+}
+$('#backupEncryptEnabled').addEventListener('change', (event) => {
+  const enabled = event.currentTarget.checked;
+  $('#backupPassphraseFields').classList.toggle('hidden', !enabled);
+  if (!enabled) { $('#backupPassphrase').value = ''; $('#backupPassphraseConfirm').value = ''; }
+});
+$('#downloadBackupButton').addEventListener('click', async () => {
+  const button = $('#downloadBackupButton');
+  const encrypted = $('#backupEncryptEnabled').checked;
+  const passphrase = $('#backupPassphrase').value;
+  const passphraseConfirm = $('#backupPassphraseConfirm').value;
+  if (encrypted && (passphrase.length < 12 || passphrase.length > 1024)) return backupStatus('加密备份密码须为 12 到 1024 个字符。', true);
+  if (encrypted && passphrase !== passphraseConfirm) return backupStatus('两次输入的备份密码不一致。', true);
+  button.disabled = true; backupStatus(encrypted ? '正在生成并加密备份…' : '正在创建备份…');
+  try {
+    const response = await fetch('/api/backup/export', { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ encrypted, passphrase:encrypted?passphrase:'' }) });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({}));
+      if (response.status === 401) showAuth();
+      throw new Error(result.error || `备份失败 (${response.status})`);
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const filename = disposition.match(/filename="([^"]+)"/)?.[1] || `youhui-backup-${new Date().toISOString().slice(0, 10)}.yhbackup`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = filename;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    backupStatus(`备份已生成${encrypted?'并已加密':''}（${(blob.size / 1024 / 1024).toFixed(1)} MB）。${encrypted?'请妥善记住备份密码；工作台不会保存它。':'未加密文件含邮箱凭据恢复密钥，请妥善保管。'}`);
+  } catch (error) { backupStatus(error.message || '无法生成备份。', true); }
+  finally { button.disabled = false; $('#backupPassphrase').value=''; $('#backupPassphraseConfirm').value=''; }
+});
+$('#chooseBackupFileButton').addEventListener('click', () => $('#backupRestoreFile').click());
+$('#backupRestoreFile').addEventListener('change', async (event) => {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.yhbackup')) {
+    backupStatus('请选择邮汇导出的 .yhbackup 文件。', true); input.value = ''; return;
+  }
+  if (file.size > 250 * 1024 * 1024) {
+    backupStatus('备份文件超过 250 MB 上限。', true); input.value = ''; return;
+  }
+  let encrypted = false;
+  let passphrase = '';
+  try {
+    const prefix = await file.slice(0, 64).arrayBuffer();
+    encrypted = new TextDecoder().decode(prefix).startsWith('YOUHUI-MAIL-ENCRYPTED-BACKUP\n');
+  } catch { backupStatus('无法读取备份文件头。', true); input.value=''; return; }
+  if (encrypted) {
+    const entered = window.prompt('此备份已加密。请输入创建备份时设置的密码（至少 12 个字符）。');
+    if (entered === null) { input.value=''; return; }
+    passphrase = entered;
+    if (passphrase.length < 12 || passphrase.length > 1024) { backupStatus('备份密码须为 12 到 1024 个字符。', true); input.value=''; return; }
+  }
+  const confirmed = await askConfirm('恢复备份并替换当前数据？', `将从“${file.name}”完整替换此工作台的邮箱账户、设置和配置；当前所有登录会话会退出。此操作无法撤销，请确保已有当前数据备份。`, '恢复并替换', true);
+  if (!confirmed) { passphrase = ''; input.value = ''; return; }
+  const button = $('#chooseBackupFileButton');
+  button.disabled = true; backupStatus('正在验证并恢复备份，请保持此页面打开…');
+  try {
+    const response = await fetch('/api/backup/restore', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream', ...(encrypted ? { 'X-Backup-Passphrase': encodeURIComponent(passphrase) } : {}) }, body: file });
+    passphrase = '';
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401) showAuth();
+      throw new Error(result.error || `恢复失败 (${response.status})`);
+    }
+    input.value = '';
+    $('#settingsDialog').close();
+    state.status = { setupRequired: false, authenticated: false, identityProviders: {} };
+    showAuth();
+    toast(result.message || '备份已恢复，请重新登录。');
+  } catch (error) { backupStatus(error.message || '无法恢复此备份。', true); }
+  finally { button.disabled = false; passphrase = ''; }
+});
 $$('[data-close]').forEach(button=>button.addEventListener('click',()=>{const dialog=document.getElementById(button.dataset.close);dialog?.close();}));
-$$('dialog').forEach(dialog=>dialog.addEventListener('click',event=>{if(event.target===dialog && event.detail>=2 && dialog.id!=='confirmDialog')dialog.close();}));
+$$('dialog').forEach(dialog=>dialog.addEventListener('click',event=>{if(event.target===dialog && event.detail>=2)dialog.close();}));
 
 $('#refreshButton').addEventListener('click',async()=>{
   if (state.folder === 'INBOX' && state.defaultAccountId && state.accountId !== state.defaultAccountId) {
@@ -549,6 +668,186 @@ async function loadOAuthConfig() {
   catch { state.oauthConfig = null; }
   if ($('#settingsDialog')?.open) fillOAuthSettingsForm();
 }
+function clearMcpTokenReveal() {
+  const input = $('#mcpTokenValue');
+  if (input) input.value = '';
+  $('#mcpTokenReveal')?.classList.add('hidden');
+  mcpTokenRevealPermission = '';
+}
+const mcpPermissionDefinitions = [
+  { id:'read_only', label:'只读', description:'查看账户、文件夹、搜索和读取邮件（读取会标记为已读）。' },
+  { id:'email_management', label:'邮件管理', description:'只读权限，并可标记读/未读、加星、归档；移入已删除必须确认。' },
+  { id:'send_mail', label:'发送邮件', description:'只读权限，并可提交邮件待确认；确认后才会发送。' },
+  { id:'full_access', label:'完全访问', description:'包含当前全部 MCP 邮件工具；发送邮件与移入已删除仍须逐项确认。' }
+];
+function selectedMcpAccountScope(row) {
+  if (row.querySelector('[data-mcp-scope-all]')?.checked) return 'all';
+  const ids = [...row.querySelectorAll('[data-mcp-scope-account]:checked')].map((input) => input.value);
+  if (!ids.length) throw new Error('请至少选择一个邮箱，或选择“全部已连接邮箱”。');
+  return ids;
+}
+function describeMcpAccountScope(scope) {
+  if (scope === 'all') return '全部已连接邮箱';
+  const accounts = state.mcpConfig?.accounts || [];
+  return scope.map((id) => accounts.find((account) => String(account.id) === String(id))?.email || accounts.find((account) => String(account.id) === String(id))?.label || '已选邮箱').join('、');
+}
+function renderMcpPermissions() {
+  const root = $('#mcpPermissionRows');
+  const permissions = state.mcpConfig?.permissions || {};
+  const accounts = state.mcpConfig?.accounts || [];
+  root.innerHTML = mcpPermissionDefinitions.map((item) => {
+    const config = permissions[item.id] || {};
+    const configured = Boolean(config.configured);
+    const allAccounts = config.accountScope !== 'selected';
+    const selectedIds = Array.isArray(config.accountIds) ? config.accountIds.map(String) : [];
+    const status = config.legacy ? '旧令牌（已降为只读）' : configured ? `已启用 · ${allAccounts ? '全部邮箱' : `${selectedIds.length} 个邮箱`}` : '尚未创建';
+    const accountOptions = accounts.length ? accounts.map((account) => {
+      const id = escapeHtml(account.id);
+      return `<label class="mcp-scope-account"><input type="checkbox" data-mcp-scope-account value="${id}" ${!allAccounts && selectedIds.includes(String(account.id)) ? 'checked' : ''}><span>${escapeHtml(account.label || account.email || account.id)}<small>${escapeHtml(account.email || '')}</small></span></label>`;
+    }).join('') : '<small class="mcp-scope-empty">尚未连接邮箱；选择“全部”可包含以后添加的邮箱。</small>';
+    return `<article class="mcp-permission-row" data-permission-row="${item.id}"><div class="mcp-permission-info"><strong>${item.label}</strong><span>${item.description}</span><small>${status}</small></div><fieldset class="mcp-scope-fieldset"><legend>允许访问的邮箱</legend><label class="mcp-scope-all"><input type="checkbox" data-mcp-scope-all ${allAccounts ? 'checked' : ''}><span>全部已连接邮箱</span></label><div class="mcp-scope-accounts">${accountOptions}</div></fieldset><div class="mcp-permission-actions"><button class="button button-quiet" type="button" data-mcp-token-action="create" data-permission="${item.id}">${configured?'轮换令牌':'创建令牌'}</button>${configured?`<button class="button button-quiet" type="button" data-mcp-token-action="save-scope" data-permission="${item.id}">保存范围</button><button class="button button-quiet mcp-revoke-button" type="button" data-mcp-token-action="revoke" data-permission="${item.id}">撤销</button>`:''}</div></article>`;
+  }).join('');
+}
+async function loadMcpConfig() {
+  clearMcpTokenReveal();
+  try {
+    state.mcpConfig = await api('/api/mcp/config');
+    $('#mcpEndpoint').textContent = state.mcpConfig.endpoint || '—';
+    renderMcpPermissions();
+    $('#mcpSettingsStatus').textContent = '';
+    $('#mcpSettingsStatus').classList.remove('error');
+    await pollMcpApprovals();
+  } catch (error) {
+    state.mcpConfig = null;
+    $('#mcpEndpoint').textContent = '无法读取 MCP 配置';
+    $('#mcpSettingsStatus').textContent = error.message;
+    $('#mcpSettingsStatus').classList.add('error');
+  }
+}
+$('#mcpPermissionRows').addEventListener('change', (event) => {
+  const row = event.target.closest('.mcp-permission-row');
+  if (!row) return;
+  if (event.target.matches('[data-mcp-scope-all]') && event.target.checked) {
+    row.querySelectorAll('[data-mcp-scope-account]').forEach((input) => { input.checked = false; });
+  } else if (event.target.matches('[data-mcp-scope-account]') && event.target.checked) {
+    const all = row.querySelector('[data-mcp-scope-all]');
+    if (all) all.checked = false;
+  }
+});
+$('#mcpPermissionRows').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-mcp-token-action]');
+  if (!button) return;
+  const permission = button.dataset.permission;
+  const action = button.dataset.mcpTokenAction;
+  const row = button.closest('.mcp-permission-row');
+  const configured = Boolean(state.mcpConfig?.permissions?.[permission]?.configured);
+  let accountIds;
+  if (action === 'create' || action === 'save-scope') {
+    try { accountIds = selectedMcpAccountScope(row); }
+    catch (error) { const status = $('#mcpSettingsStatus'); status.textContent = error.message; status.classList.add('error'); return; }
+  }
+  if (action === 'create' && configured && !await askConfirm('轮换此 MCP 令牌？', `现有令牌会立即失效；新令牌只可访问：${describeMcpAccountScope(accountIds)}。已连接的 Agent 需要更新。`, '轮换令牌', true)) return;
+  if (action === 'revoke' && !await askConfirm('撤销此 MCP 令牌？', '使用此令牌的 Agent 会立即失去对应权限；其他权限的令牌不受影响。', '撤销令牌', true)) return;
+  button.disabled = true;
+  const status = $('#mcpSettingsStatus'); status.textContent = action === 'create' ? '正在创建或轮换令牌…' : action === 'save-scope' ? '正在保存邮箱范围…' : '正在撤销令牌…'; status.classList.remove('error');
+  try {
+    if (action === 'create') {
+      const result = await api('/api/mcp/token', { method:'POST', body:JSON.stringify({ permission, accountIds }) });
+      if (!state.mcpConfig) state.mcpConfig = { permissions:{} };
+      state.mcpConfig.permissions[permission] = { ...state.mcpConfig.permissions?.[permission], configured:true, legacy:false, accountScope:accountIds === 'all' ? 'all' : 'selected', accountIds:accountIds === 'all' ? [] : accountIds };
+      renderMcpPermissions();
+      $('#mcpTokenValue').value = result.token;
+      $('#mcpTokenScope').textContent = `${mcpPermissionDefinitions.find((item)=>item.id===permission)?.label || 'MCP'}新令牌`;
+      $('#mcpTokenReveal').classList.remove('hidden'); mcpTokenRevealPermission = permission;
+      status.textContent = '令牌仅显示这一次；请复制到可信任的 Agent 配置中。关闭设置后无法再次查看。';
+    } else if (action === 'save-scope') {
+      const result = await api(`/api/mcp/token/${encodeURIComponent(permission)}/scope`, { method:'POST', body:JSON.stringify({ accountIds }) });
+      state.mcpConfig.permissions[permission] = { ...state.mcpConfig.permissions[permission], ...result };
+      renderMcpPermissions();
+      status.textContent = `已保存范围：${describeMcpAccountScope(accountIds)}。`;
+    } else if (action === 'revoke') {
+      await api(`/api/mcp/token/${encodeURIComponent(permission)}`, { method:'DELETE' });
+      state.mcpConfig.permissions[permission] = { configured:false, legacy:false, accountScope:'all', accountIds:[] };
+      if (mcpTokenRevealPermission === permission) clearMcpTokenReveal();
+      renderMcpPermissions(); status.textContent = '此权限令牌已撤销。';
+    }
+  } catch (error) { status.textContent = error.message; status.classList.add('error'); }
+  finally { button.disabled = false; }
+});
+$('#copyMcpToken').addEventListener('click', async () => {
+  const token = $('#mcpTokenValue').value;
+  if (!token) return;
+  try {
+    await navigator.clipboard.writeText(token);
+    $('#mcpSettingsStatus').textContent = '令牌已复制。请只粘贴到可信任的 MCP Agent 配置中。';
+    $('#mcpSettingsStatus').classList.remove('error');
+  } catch {
+    $('#mcpTokenValue').focus(); $('#mcpTokenValue').select();
+    $('#mcpSettingsStatus').textContent = '无法自动复制；已选中令牌，请使用设备的复制操作。';
+    $('#mcpSettingsStatus').classList.remove('error');
+  }
+});
+function renderMcpApprovals() {
+  const root = $('#mcpApprovalList');
+  const banner = $('#mcpApprovalBanner');
+  const list = Array.isArray(mcpApprovals) ? mcpApprovals : [];
+  banner.classList.toggle('hidden', list.length === 0 || $('#appView').classList.contains('hidden'));
+  $('#mcpApprovalBannerText').textContent = list.length ? `有 ${list.length} 项待确认的 MCP 邮件操作` : '有待确认的 MCP 邮件操作';
+  if (!list.length) { root.innerHTML = '<div class="settings-empty">目前没有待确认操作。</div>'; return; }
+  root.innerHTML = list.map((item) => {
+    const send = item.kind === 'send_email';
+    const title = send ? `待发送：${item.subject || '(无主题)'}` : '待移入已删除';
+    const details = send
+      ? `<div class="mcp-approval-address"><strong>收件人：</strong>${escapeHtml(item.to || '')}${item.cc?`<br><strong>抄送：</strong>${escapeHtml(item.cc)}`:''}${item.bcc?`<br><strong>密送：</strong>${escapeHtml(item.bcc)}`:''}</div><pre class="mcp-approval-preview">${escapeHtml(item.text || '(无正文)')}</pre>`
+      : `<div class="mcp-approval-address">${escapeHtml(item.accountEmail || '')} · ${escapeHtml(item.folder || 'INBOX')} · UID ${Number(item.uid) || ''}</div>`;
+    const date = item.createdAt ? dateLong(item.createdAt) : '';
+    return `<article class="mcp-approval-card"><div class="mcp-approval-head"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(item.accountLabel || item.accountEmail || '')}${date?` · ${escapeHtml(date)}`:''}</small></div>${details}<div class="mcp-approval-actions"><button class="button button-primary" type="button" data-mcp-approval-action="approve" data-approval-id="${escapeHtml(item.id)}">${send?'确认并发送':'确认移入已删除'}</button><button class="button button-quiet" type="button" data-mcp-approval-action="deny" data-approval-id="${escapeHtml(item.id)}">拒绝</button></div></article>`;
+  }).join('');
+}
+async function pollMcpApprovals() {
+  if (mcpApprovalPollInFlight || $('#appView').classList.contains('hidden')) return;
+  mcpApprovalPollInFlight = true;
+  try { const data = await api('/api/mcp/approvals'); mcpApprovals = Array.isArray(data.approvals) ? data.approvals : []; renderMcpApprovals(); }
+  catch {}
+  finally { mcpApprovalPollInFlight = false; }
+}
+function startMcpApprovalPolling() {
+  stopMcpApprovalPolling();
+  void pollMcpApprovals();
+  mcpApprovalPollTimer = setInterval(() => void pollMcpApprovals(), 10_000);
+}
+function stopMcpApprovalPolling() {
+  if (mcpApprovalPollTimer) clearInterval(mcpApprovalPollTimer);
+  mcpApprovalPollTimer = null; mcpApprovalPollInFlight = false; mcpApprovals = [];
+  if ($('#mcpApprovalBanner')) $('#mcpApprovalBanner').classList.add('hidden');
+}
+$('#mcpApprovalList').addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-mcp-approval-action]');
+  if (!button) return;
+  const id = button.dataset.approvalId;
+  const approval = mcpApprovals.find((item) => item.id === id);
+  if (!approval) return;
+  const send = approval.kind === 'send_email';
+  if (button.dataset.mcpApprovalAction === 'approve') {
+    const copy = send
+      ? `将从 ${approval.accountEmail || approval.accountLabel || '所选邮箱'} 发送给 ${approval.to || '未指定收件人'}。主题：${approval.subject || '(无主题)'}。\n\n${String(approval.text || '').slice(0,4000)}`
+      : `将把 ${approval.accountEmail || approval.accountLabel || '所选邮箱'} 中 ${approval.folder || 'INBOX'} 的邮件 UID ${approval.uid} 移入“已删除”。这不是永久删除。`;
+    if (!await askConfirm(send?'确认发送这封邮件？':'确认移入已删除？', copy, send?'确认并发送':'移入已删除', true)) return;
+  }
+  button.disabled = true;
+  try {
+    if (button.dataset.mcpApprovalAction === 'approve') {
+      const result = await api(`/api/mcp/approvals/${encodeURIComponent(id)}/approve`, { method:'POST', body:JSON.stringify({}) });
+      toast(send ? (result.result?.warning || result.result?.message || '邮件已发送。') : '邮件已移入已删除。', Boolean(result.result?.warning));
+    } else {
+      await api(`/api/mcp/approvals/${encodeURIComponent(id)}/deny`, { method:'POST', body:JSON.stringify({}) });
+      toast('已拒绝此 MCP 操作。');
+    }
+    await pollMcpApprovals();
+  } catch (error) { toast(error.message, true); await pollMcpApprovals(); }
+});
+$('#reviewMcpApprovals').addEventListener('click', () => { void openSettings('mcp'); });
+$('#settingsDialog').addEventListener('close', clearMcpTokenReveal);
 function fillOAuthSettingsForm() {
   const config = state.oauthConfig;
   if (!config) return;
@@ -607,18 +906,41 @@ function fillNotificationSettingsForm() {
   const config = state.notificationConfig || { enabled:true, intervalSeconds:120, webhookEnabled:false, webhookConfigured:false, webhookSecretConfigured:false };
   $('#notificationChecksEnabled').checked = config.enabled !== false;
   $('#notificationInterval').value = String(config.intervalSeconds || 120);
+  $('#notificationProvider').value = config.pushProvider === 'wxpusher' ? 'wxpusher' : 'webhook';
   $('#webhookEnabled').checked = Boolean(config.webhookEnabled);
+  $('#wxpusherEnabled').checked = Boolean(config.wxpusherEnabled);
   $('#webhookUrl').value = '';
   $('#webhookUrl').placeholder = config.webhookConfigured ? '已保存；留空保留，填写新地址可替换' : 'https://hooks.example.com/your-endpoint';
   $('#webhookSecret').value = '';
   $('#webhookSecret').placeholder = config.webhookSecretConfigured ? '已保存；留空保留，输入新密钥可替换' : '输入可选的签名密钥';
+  const appTokenConfigured = Boolean(config.wxpusherAppTokenConfigured);
+  $('#wxpusherAppToken').value = '';
+  $('#wxpusherAppToken').placeholder = appTokenConfigured ? '已保存；留空保留，输入新 AppToken 可替换' : '输入 WxPusher AppToken';
+  $('#wxpusherAppTokenHint').textContent = appTokenConfigured ? 'AppToken 已配置（值不回传）；留空保存会保留现有值。' : 'AppToken 尚未配置。';
+  const uidValues = String(config.wxpusherUids || '');
+  const topicValues = String(config.wxpusherTopicIds || '');
+  $('#wxpusherUids').value = uidValues;
+  $('#wxpusherTopicIds').value = topicValues;
+  $('#wxpusherUidsHint').textContent = uidValues ? '显示当前已保存 UID；可直接编辑或清空。清空后若 Topic ID 也为空将无法保存。' : '尚未配置 UID；可逐行或逗号分隔输入。';
+  $('#wxpusherTopicIdsHint').textContent = topicValues ? '显示当前已保存 topicId；可直接编辑或清空。清空后若 UID 也为空将无法保存。' : '尚未配置 topicId；可逐行或逗号分隔输入。';
   $('#clearWebhookConfig').disabled = !config.webhookConfigured && !config.webhookSecretConfigured;
   $('#testWebhook').disabled = !config.webhookConfigured;
+  $('#testWxpusher').disabled = !config.wxpusherAppTokenConfigured || (!uidValues.trim() && !topicValues.trim());
+  updateNotificationProviderFields();
   $('#browserNotificationStatus').textContent = notificationPermissionText();
   $('#notificationsSettingsStatus').textContent = '';
   $('#notificationsSettingsStatus').classList.remove('error');
   updateNotificationScopeNote();
 }
+function updateNotificationProviderFields() {
+  const wxpusher = $('#notificationProvider').value === 'wxpusher';
+  $('#webhookProviderFields').classList.toggle('hidden', wxpusher);
+  $('#wxpusherProviderFields').classList.toggle('hidden', !wxpusher);
+  $('#clearWebhookConfig').classList.toggle('hidden', wxpusher);
+  $('#testWebhook').classList.toggle('hidden', wxpusher);
+  $('#testWxpusher').classList.toggle('hidden', !wxpusher);
+}
+$('#notificationProvider').addEventListener('change', updateNotificationProviderFields);
 function notificationCursorRead() {
   if (state.notificationCursor !== null && Number.isSafeInteger(state.notificationCursor)) return state.notificationCursor;
   try {
@@ -978,16 +1300,22 @@ function notificationsSettingsStatus(text, isError = false) {
 }
 $('#notificationsSettingsForm').addEventListener('submit', async (event) => {
   event.preventDefault();
+  const uidTargets = $('#wxpusherUids').value.split(/[\n,，]+/).map(value => value.trim()).filter(Boolean);
+  const topicTargets = $('#wxpusherTopicIds').value.split(/[\n,，]+/).map(value => value.trim()).filter(Boolean);
+  if ($('#wxpusherEnabled').checked && !uidTargets.length && !topicTargets.length) return notificationsSettingsStatus('启用 WxPusher 时，UID 与 topicId 不能同时为空。', true);
   const button = $('#saveNotificationsConfig'); button.disabled = true; notificationsSettingsStatus('正在保存…');
   try {
     state.notificationConfig = await api('/api/notifications/config', { method:'PUT', body:JSON.stringify({
       enabled:$('#notificationChecksEnabled').checked, intervalSeconds:Number($('#notificationInterval').value),
-      webhookEnabled:$('#webhookEnabled').checked, webhookUrl:$('#webhookUrl').value.trim(), webhookSecret:$('#webhookSecret').value
+      webhookEnabled:$('#webhookEnabled').checked, webhookUrl:$('#webhookUrl').value.trim(), webhookSecret:$('#webhookSecret').value,
+      pushProvider:$('#notificationProvider').value, wxpusherEnabled:$('#wxpusherEnabled').checked,
+      wxpusherAppToken:$('#wxpusherAppToken').value.trim(),
+      wxpusherUids:uidTargets, wxpusherTopicIds:topicTargets
     }) });
     fillNotificationSettingsForm();
-    notificationsSettingsStatus('设置已保存；Webhook 地址与签名密钥已加密，且不会回传。');
+    notificationsSettingsStatus('设置已保存；Webhook 地址、签名密钥与 AppToken 不会回传。WxPusher 测试只表示服务端已受理发送任务，不保证送达。');
   } catch (error) { notificationsSettingsStatus(error.message, true); }
-  finally { button.disabled = false; $('#webhookUrl').value = ''; $('#webhookSecret').value = ''; }
+  finally { button.disabled = false; $('#webhookUrl').value = ''; $('#webhookSecret').value = ''; $('#wxpusherAppToken').value = ''; }
 });
 $('#clearWebhookConfig').addEventListener('click', async () => {
   const configured = state.notificationConfig?.webhookConfigured || state.notificationConfig?.webhookSecretConfigured;
@@ -1008,6 +1336,18 @@ $('#testWebhook').addEventListener('click', async () => {
     notificationsSettingsStatus(result.message || '测试通知已成功发送。');
   } catch (error) { notificationsSettingsStatus(error.message, true); }
   finally { button.disabled = !state.notificationConfig?.webhookConfigured; }
+});
+$('#testWxpusher').addEventListener('click', async () => {
+  if (!state.notificationConfig?.wxpusherAppTokenConfigured) return notificationsSettingsStatus('请先保存 WxPusher AppToken 与至少一个接收目标。', true);
+  const button = $('#testWxpusher'); button.disabled = true; notificationsSettingsStatus('正在提交 WxPusher 合成测试事件…');
+  try {
+    await api('/api/notifications/wxpusher/test', { method:'POST', body:JSON.stringify({}) });
+    notificationsSettingsStatus('WxPusher 已受理发送任务，不保证送达。');
+  } catch (error) { notificationsSettingsStatus(error.message, true); }
+  finally {
+    const saved = state.notificationConfig || {};
+    button.disabled = !saved.wxpusherAppTokenConfigured || (!String(saved.wxpusherUids || '').trim() && !String(saved.wxpusherTopicIds || '').trim());
+  }
 });
 function oauthSettingsStatus(message, isError = false) {
   const node = $('#oauthSettingsStatus'); node.textContent = message; node.classList.toggle('error', isError);

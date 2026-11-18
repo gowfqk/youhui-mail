@@ -21,6 +21,16 @@ test('renders email only inside a sandbox without same-origin access', () => {
   assert.match(frameScript, /event\.data\.type === 'load-remote-images'\) loadRemoteImagesAfterConsent\(\)/);
 });
 
+test('Docker image includes the runtime mail sanitizer, CSP module and frame document', () => {
+  const dockerfile = read('../Dockerfile');
+  const copiedServerFiles = dockerfile.match(/^COPY server\.js ai-service\.js mcp-service\.js (.+) \.\/$/m)?.[1]?.split(/\s+/) || [];
+
+  for (const filename of ['email-html.js', 'security-policy.js', 'mail-frame.html']) {
+    assert.ok(copiedServerFiles.includes(filename), `Docker build must copy ${filename}`);
+  }
+  assert.match(dockerfile, /^COPY public \.\/public$/m);
+});
+
 test('content-hashed app and iframe assets exactly match their sources', () => {
   const index = read('../public/index.html');
   const appSource = read('../public/app.js');

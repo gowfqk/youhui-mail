@@ -24,9 +24,11 @@ test('renders email only inside a sandbox without same-origin access', () => {
 test('Docker image includes the runtime mail sanitizer, CSP module and frame document', () => {
   const dockerfile = read('../Dockerfile');
   const copiedServerFiles = dockerfile.match(/^COPY server\.js ai-service\.js mcp-service\.js (.+) \.\/$/m)?.[1]?.split(/\s+/) || [];
+  const dockerignore = read('../.dockerignore').split(/\r?\n/);
 
   for (const filename of ['email-html.js', 'security-policy.js', 'mail-frame.html']) {
     assert.ok(copiedServerFiles.includes(filename), `Docker build must copy ${filename}`);
+    assert.ok(dockerignore.includes(`!${filename}`), `Docker build context must include ${filename}`);
   }
   assert.match(dockerfile, /^COPY public \.\/public$/m);
 });

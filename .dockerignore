@@ -5,5 +5,8 @@
 !server.js
 !ai-service.js
 !mcp-service.js
+!email-html.js
+!security-policy.js
+!mail-frame.html
 !public/
 !public/**

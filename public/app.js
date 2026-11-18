@@ -5,6 +5,13 @@ const state = {
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+window.addEventListener('message', (event) => {
+  const frame = $('#mailBody .mail-body-frame');
+  if (!frame || event.source !== frame.contentWindow || !event.data || typeof event.data !== 'object' || event.data.type !== 'youhui-mail-frame-height') return;
+  const height = Number(event.data.height);
+  if (!Number.isFinite(height)) return;
+  frame.height = String(Math.min(6000, Math.max(300, Math.ceil(height))));
+});
 const folderTitles = { INBOX: '收件箱', Starred: '已加星标', Sent: '已发送', Drafts: '草稿', Archive: '归档', Spam: '垃圾邮件', Trash: '已删除' };
 const accountColors = ['#368a80','#b78350','#777eae','#ad6e79','#5d87a1','#8974a3'];
 const providerIconData = {
@@ -304,29 +311,28 @@ function renderDetail(detail, message) {
   </article>`;
   const body = $('#mailBody', pane);
   if (detail.html) {
-    const content = document.createElement('div'); content.className = 'mail-body-content';
-    // The API returns HTML sanitized by sanitize-html; remote image URLs are kept inert in data-external-src.
-    content.innerHTML = detail.html;
-    content.querySelectorAll('a[href]').forEach((link) => { link.target = '_blank'; link.rel = 'noopener noreferrer'; });
-    content.querySelectorAll('table').forEach((table) => {
-      const scroll = document.createElement('div'); scroll.className = 'mail-table-scroll';
-      table.before(scroll); scroll.append(table);
-    });
-    const remoteImages = [...content.querySelectorAll('img[data-external-src]')];
-    if (remoteImages.length) {
+    const emailHtml = String(detail.html);
+    const inertTemplate = document.createElement('template');
+    inertTemplate.innerHTML = emailHtml;
+    const remoteImageCount = inertTemplate.content.querySelectorAll('img[data-external-src]').length;
+    const frame = document.createElement('iframe');
+    frame.className = 'mail-body-frame';
+    frame.title = '邮件正文';
+    frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
+    frame.referrerPolicy = 'no-referrer';
+    frame.height = '320';
+    frame.src = '/mail-frame';
+    frame.addEventListener('load', () => {
+      frame.contentWindow?.postMessage({ type: 'render-email', html: emailHtml }, '*');
+    }, { once: true });
+    if (remoteImageCount) {
       const notice = document.createElement('div'); notice.className = 'remote-image-notice';
-      const copy = document.createElement('p'); copy.textContent = `此邮件包含 ${remoteImages.length} 张远程图片，默认未加载。加载后，图片来源网站可能获知你的 IP 地址和访问时间。`;
+      const copy = document.createElement('p'); copy.textContent = `此邮件包含 ${remoteImageCount} 张远程图片，默认未加载。加载后，图片来源网站可能获知你的 IP 地址和访问时间。`;
       const load = document.createElement('button'); load.type = 'button'; load.textContent = '加载外部图片';
-      load.addEventListener('click', () => {
-        remoteImages.forEach((image) => {
-          const source = image.getAttribute('data-external-src') || '';
-          if (/^https?:\/\//i.test(source)) { image.setAttribute('src', source); image.removeAttribute('data-external-src'); }
-        });
-        notice.remove();
-      }, { once:true });
+      load.addEventListener('click', () => { frame.contentWindow?.postMessage({ type: 'load-remote-images' }, '*'); notice.remove(); }, { once:true });
       notice.append(copy, load); body.append(notice);
     }
-    body.append(content);
+    body.append(frame);
   } else { const pre = document.createElement('div'); pre.className='mail-body-text'; pre.textContent = detail.text || '(此邮件没有可显示的正文。)'; body.append(pre); }
   $$('[data-action]', pane).forEach((button) => button.addEventListener('click', () => handleDetailAction(button.dataset.action, message, detail)));
 }

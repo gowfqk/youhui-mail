@@ -4,7 +4,8 @@ import Database from 'better-sqlite3';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
-import sanitizeHtml from 'sanitize-html';
+import { sanitizeEmailHtml } from './email-html.js';
+import { securityHeadersForPath } from './security-policy.js';
 import https from 'node:https';
 import net from 'node:net';
 import { lookup } from 'node:dns/promises';
@@ -130,11 +131,12 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 let restoreInProgress = false;
 app.use((req, res, next) => {
+  const securityHeaders = securityHeadersForPath(req.path);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Frame-Options', securityHeaders.xFrameOptions);
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; frame-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  res.setHeader('Content-Security-Policy', securityHeaders.contentSecurityPolicy);
   next();
 });
 app.use((req, res, next) => {
@@ -143,7 +145,10 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '28mb' }));
 app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1h' }));
-
+app.get('/mail-frame', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'mail-frame.html'), (error) => { if (error) next(error); });
+});
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 function encrypt(value) {
   const iv = crypto.randomBytes(12);
@@ -685,28 +690,7 @@ async function getMailDetail(account, folderKey, uid) {
         try { await client.messageFlagsAdd(Number(uid), ['\\Seen'], { uid: true }); } catch {}
         const parsed = await simpleParser(item.source);
         const inlineImages = inlineImageData(parsed.attachments || []);
-        const cleanHtml = parsed.html ? sanitizeHtml(String(parsed.html), {
-          allowedTags: ['a','p','br','div','span','b','strong','i','em','u','s','blockquote','ul','ol','li','table','thead','tbody','tr','td','th','h1','h2','h3','h4','pre','code','hr','font','img'],
-          allowedAttributes: { a: ['href','title','target','rel'], td: ['colspan','rowspan'], th: ['colspan','rowspan'], font: ['color','size','face'], img: ['src','alt','title','width','height','data-external-src'] },
-          allowedSchemes: ['http','https','mailto'], allowedSchemesByTag: { img: ['data'] }, allowProtocolRelative: false, disallowedTagsMode: 'discard',
-          transformTags: {
-            a: (tagName, attributes) => ({ tagName, attribs: { ...attributes, target: '_blank', rel: 'noopener noreferrer' } }),
-            img: (tagName, attributes) => {
-            const safeAttributes = { ...attributes };
-            const source = String(safeAttributes.src || '').trim();
-            delete safeAttributes['data-external-src'];
-            if (/^cid:/i.test(source)) {
-              const inlineSource = inlineImages.get(normalizeContentId(source));
-              if (inlineSource) safeAttributes.src = inlineSource;
-              else delete safeAttributes.src;
-            } else if (/^https?:\/\//i.test(source)) {
-              safeAttributes['data-external-src'] = source;
-              delete safeAttributes.src;
-            } else delete safeAttributes.src;
-            return { tagName, attribs: safeAttributes };
-          }
-          }
-        }) : '';
+        const cleanHtml = parsed.html ? sanitizeEmailHtml(String(parsed.html), inlineImages) : '';
         return {
           accountId: account.id, email: account.email, uid: item.uid, folder: pathName,
           subject: parsed.subject || item.envelope?.subject || '(无主题)', from: (parsed.from?.value || messageAddress(item.envelope, 'from')),

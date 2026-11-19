@@ -22,6 +22,8 @@ const providerIconData = {
   custom: { label:'其他邮箱', mark:'✉' }
 };
 let toastTimer;
+let openMessageContext = null;
+const pendingMessageActions = new Set();
 let composeFiles = [];
 let composeReplyMeta = null;
 let notificationPollTimer = null;
@@ -291,6 +293,7 @@ async function loadMessages() {
 }
 function renderMessages() {
   const list = $('#messageList');
+  closeMessageContextMenu();
   const scrollTop = list.scrollTop;
   list.innerHTML = state.messages.map((m, index) => {
     const sender = m.from?.[0]?.name || m.from?.[0]?.address || '未知发件人';
@@ -298,7 +301,7 @@ function renderMessages() {
     const account = state.accounts.find((a) => a.id === m.accountId);
     const preview = fromEmail && sender !== fromEmail ? fromEmail : (account && state.accounts.length > 1 ? account.email : '');
     const selected = state.selected && state.selected.uid === m.uid && state.selected.accountId === m.accountId;
-    return `<article class="message-row ${m.unread?'unread':''} ${selected?'selected':''}" data-idx="${index}" tabindex="0" role="button" aria-label="打开邮件：${escapeHtml(m.subject)}">
+    return `<article class="message-row ${m.unread?'unread':''} ${selected?'selected':''}" data-idx="${index}" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="打开邮件：${escapeHtml(m.subject)}">
       <span class="sender-avatar ${colorClass(fromEmail || sender)}">${escapeHtml(initials(sender))}</span>
       <div class="message-content"><div class="message-line"><span class="message-sender">${escapeHtml(sender)}</span><time class="message-time">${escapeHtml(dateShort(m.date))}</time></div>
       <div class="message-subject">${escapeHtml(m.subject || '(无主题)')}</div><div class="message-preview">${escapeHtml(preview || '点击查看邮件内容')}</div>
@@ -306,9 +309,178 @@ function renderMessages() {
   }).join('');
   $$('.message-row', list).forEach((row) => {
     row.addEventListener('click', () => openMessage(Number(row.dataset.idx)));
-    row.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openMessage(Number(row.dataset.idx)); } });
+    row.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openMessageContextMenu(state.messages[Number(row.dataset.idx)], row, event.clientX, event.clientY);
+    });
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+        event.preventDefault();
+        const bounds = row.getBoundingClientRect();
+        openMessageContextMenu(state.messages[Number(row.dataset.idx)], row, bounds.left + 18, bounds.bottom - 4);
+        return;
+      }
+      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openMessage(Number(row.dataset.idx)); }
+    });
   });
   list.scrollTop = scrollTop;
+}
+function sameMessage(left, right) {
+  return Boolean(left && right && String(left.accountId) === String(right.accountId) && String(left.uid) === String(right.uid) && String(left.folder || state.folder) === String(right.folder || state.folder));
+}
+function messageActionKey(message) {
+  return `${String(message?.accountId || '')}:${String(message?.folder || state.folder)}:${String(message?.uid ?? '')}`;
+}
+function closeMessageContextMenu({ restoreFocus = false } = {}) {
+  const menu = $('#messageContextMenu');
+  const trigger = openMessageContext?.trigger;
+  if (!menu && !openMessageContext) return;
+  openMessageContext = null;
+  if (menu) { menu.classList.add('hidden'); menu.replaceChildren(); }
+  trigger?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus && trigger?.isConnected) trigger.focus();
+}
+function ensureMessageContextMenu() {
+  const existing = $('#messageContextMenu');
+  if (existing) return existing;
+  const menu = document.createElement('div');
+  menu.id = 'messageContextMenu';
+  menu.className = 'mail-context-menu hidden';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', '邮件操作');
+  menu.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-context-action]');
+    if (!button || button.disabled || !openMessageContext) return;
+    event.preventDefault();
+    const message = openMessageContext.message;
+    const action = button.dataset.contextAction;
+    closeMessageContextMenu({ restoreFocus: true });
+    void performMessageAction(action, message);
+  });
+  menu.addEventListener('keydown', (event) => {
+    const items = $$('[role="menuitem"]:not(:disabled)', menu);
+    const current = items.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const offset = event.key === 'ArrowDown' ? 1 : -1;
+      items[(current + offset + items.length) % items.length]?.focus();
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      items[event.key === 'Home' ? 0 : items.length - 1]?.focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      closeMessageContextMenu({ restoreFocus: true });
+    } else if (event.key === 'Tab') {
+      closeMessageContextMenu({ restoreFocus: true });
+    }
+  });
+  document.body.append(menu);
+  document.addEventListener('pointerdown', (event) => {
+    if (!menu.classList.contains('hidden') && !menu.contains(event.target)) closeMessageContextMenu();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && openMessageContext && !menu.contains(document.activeElement)) closeMessageContextMenu({ restoreFocus: true });
+  });
+  window.addEventListener('resize', () => closeMessageContextMenu());
+  document.addEventListener('scroll', () => closeMessageContextMenu(), true);
+  return menu;
+}
+function openMessageContextMenu(message, trigger, x, y) {
+  if (!message || !trigger) return;
+  const actions = window.YouhuiMailContextActions.buildMessageActions(message, state.folder, state.folders);
+  const menu = ensureMessageContextMenu();
+  closeMessageContextMenu();
+  openMessageContext = { message, trigger };
+  menu.replaceChildren();
+  const key = messageActionKey(message);
+  actions.forEach((item) => {
+    if (item.destructive) {
+      const separator = document.createElement('div');
+      separator.className = 'mail-context-separator';
+      separator.setAttribute('role', 'separator');
+      menu.append(separator);
+    }
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `mail-context-item${item.destructive ? ' is-danger' : ''}`;
+    button.setAttribute('role', 'menuitem');
+    button.tabIndex = -1;
+    button.dataset.contextAction = item.action;
+    button.disabled = pendingMessageActions.has(key);
+    button.textContent = item.label;
+    menu.append(button);
+  });
+  menu.style.left = '0px'; menu.style.top = '0px';
+  menu.classList.remove('hidden');
+  const bounds = menu.getBoundingClientRect();
+  const margin = 8;
+  menu.style.left = `${Math.max(margin, Math.min(x, window.innerWidth - bounds.width - margin))}px`;
+  menu.style.top = `${Math.max(margin, Math.min(y, window.innerHeight - bounds.height - margin))}px`;
+  trigger.setAttribute('aria-expanded', 'true');
+  menu.querySelector('[role="menuitem"]:not(:disabled)')?.focus();
+}
+function writeCurrentMessageListCache() {
+  const messages = state.olderFirst ? [...state.messages].reverse() : [...state.messages];
+  mailListCache.write(
+    { accountId: state.accountId, folder: state.folder, page: state.page, query: state.query },
+    { messages, total: state.total }
+  );
+}
+function updateDetailMessageActions(message) {
+  if (!sameMessage(state.selected, message)) return;
+  state.selected.unread = message.unread;
+  state.selected.flagged = message.flagged;
+  const pane = $('#detailPane');
+  const readButton = $('[data-action="read"], [data-action="unread"]', pane);
+  if (readButton) {
+    const action = message.unread ? 'read' : 'unread';
+    const label = message.unread ? '标为已读' : '标为未读';
+    readButton.dataset.action = action; readButton.title = label; readButton.setAttribute('aria-label', label);
+  }
+  const starButton = $('[data-action="star"], [data-action="unstar"]', pane);
+  if (starButton) {
+    const action = message.flagged ? 'unstar' : 'star';
+    const label = message.flagged ? '取消星标' : '加星标';
+    starButton.dataset.action = action; starButton.title = label; starButton.setAttribute('aria-label', label);
+    starButton.textContent = message.flagged ? '★' : '☆';
+  }
+}
+async function performMessageAction(action, message) {
+  const supported = ['read', 'unread', 'star', 'unstar', 'archive', 'delete'];
+  if (!message || !supported.includes(action)) return;
+  const key = messageActionKey(message);
+  if (pendingMessageActions.has(key)) return;
+  pendingMessageActions.add(key);
+  try {
+    if (action === 'delete' || action === 'archive') {
+      const isTrash = action === 'delete';
+      const title = isTrash ? '移到垃圾箱？' : '归档这封邮件？';
+      const copy = isTrash ? '邮件会移到此邮箱的“已删除”文件夹；通常可在清空垃圾箱前恢复。' : '邮件会移动到此邮箱的归档文件夹。';
+      if (!await askConfirm(title, copy, isTrash ? '移到垃圾箱' : '归档', isTrash)) return;
+    }
+    await api(`/api/message/${encodeURIComponent(message.accountId)}/${message.uid}/action`, {
+      method: 'POST', body: JSON.stringify({ folder: message.folder || state.folder, action })
+    });
+    if (action === 'archive' || action === 'delete') {
+      const countBefore = state.messages.length;
+      state.messages = state.messages.filter((item) => !sameMessage(item, message));
+      state.total = Math.max(0, state.total - (countBefore - state.messages.length));
+      if (sameMessage(state.selected, message)) {
+        state.selected = null; state.detail = null; renderDetailPlaceholder();
+      }
+    } else {
+      if (action === 'read') message.unread = false;
+      if (action === 'unread') message.unread = true;
+      if (action === 'star') message.flagged = true;
+      if (action === 'unstar') message.flagged = false;
+      updateDetailMessageActions(message);
+    }
+    writeCurrentMessageListCache();
+    renderMessages();
+    toast(({ read:'已标为已读', unread:'已标为未读', star:'已加星标', unstar:'已取消星标', archive:'邮件已归档', delete:'邮件已移到垃圾箱' })[action] || '已完成');
+    await loadMessages();
+  } catch (error) { toast(error.message, true); }
+  finally { pendingMessageActions.delete(key); }
 }
 function renderDetailPlaceholder() {
   const pane = $('#detailPane'); pane.classList.remove('mobile-open'); pane.classList.add('empty-detail');
@@ -337,7 +509,7 @@ function renderDetail(detail, message) {
   pane.innerHTML = `<article class="detail-view">
     <div class="detail-toolbar"><button class="icon-button detail-back" data-action="back" aria-label="返回邮件列表" title="返回">←</button><div class="detail-actions">
       <button class="icon-button" data-action="archive" title="归档" aria-label="归档">▣</button><button class="icon-button" data-action="delete" title="移到已删除" aria-label="移到已删除">⌫</button>
-      <button class="icon-button" data-action="unread" title="标为未读" aria-label="标为未读">◉</button><button class="icon-button" data-action="${message.flagged?'unstar':'star'}" title="${message.flagged?'取消星标':'加星标'}" aria-label="${message.flagged?'取消星标':'加星标'}">${message.flagged?'★':'☆'}</button><button class="icon-button" data-action="translate" title="使用已配置的专用翻译 API 翻译为简体中文" aria-label="翻译为简体中文">译</button>
+      <button class="icon-button" data-action="${message.unread?'read':'unread'}" title="${message.unread?'标为已读':'标为未读'}" aria-label="${message.unread?'标为已读':'标为未读'}">◉</button><button class="icon-button" data-action="${message.flagged?'unstar':'star'}" title="${message.flagged?'取消星标':'加星标'}" aria-label="${message.flagged?'取消星标':'加星标'}">${message.flagged?'★':'☆'}</button><button class="icon-button" data-action="translate" title="使用已配置的专用翻译 API 翻译为简体中文" aria-label="翻译为简体中文">译</button>
     </div><button class="icon-button" data-action="refresh" title="刷新邮件">⟳</button></div>
     <h1 class="detail-subject">${escapeHtml(detail.subject || '(无主题)')}</h1>
     <div class="sender-meta"><span class="sender-avatar ${colorClass(detail.from?.[0]?.address || sender)}">${escapeHtml(initials(sender))}</span><div class="sender-info"><div class="sender-info-main"><strong>${escapeHtml(sender)}</strong><span>&lt;${escapeHtml(detail.from?.[0]?.address || '')}&gt;</span></div><div class="sender-detail-line">发给 ${escapeHtml(to)}${detail.cc?.length ? ` · 抄送 ${escapeHtml(addressText(detail.cc))}` : ''}</div></div><time class="detail-date">${escapeHtml(dateLong(detail.date))}</time></div>
@@ -384,17 +556,7 @@ async function handleDetailAction(action, message, detail) {
   if (action === 'refresh') return openMessage(state.messages.findIndex((m) => m.uid === message.uid && m.accountId === message.accountId));
   if (action === 'translate') return translateEmail(detail);
   if (action === 'reply') return openCompose({ accountId:detail.accountId, to:detail.from?.[0]?.address || '', subject:/^re:/i.test(detail.subject)?detail.subject:`Re: ${detail.subject}`, inReplyTo:detail.messageId || detail.inReplyTo, references:[detail.references,detail.messageId].filter(Boolean).join(' '), quoted:`\n\n—— 原邮件 ——\n${detail.text || '[HTML 邮件内容]'}\n` });
-  if (action === 'delete' || action === 'archive') {
-    const title = action === 'delete' ? '移到已删除？' : '归档这封邮件？';
-    const copy = action === 'delete' ? '邮件会移到此邮箱的“已删除”文件夹；通常可在清空垃圾箱前恢复。' : '邮件会移动到此邮箱的归档文件夹。';
-    if (!await askConfirm(title, copy, action === 'delete' ? '移到已删除' : '归档', action === 'delete')) return;
-  }
-  try {
-    await api(`/api/message/${encodeURIComponent(message.accountId)}/${message.uid}/action`, { method:'POST', body:JSON.stringify({ folder:message.folder || state.folder, action }) });
-    toast(({read:'已标为已读',unread:'已标为未读',star:'已加星标',unstar:'已取消星标',archive:'邮件已归档',delete:'邮件已移到已删除'})[action] || '已完成');
-    if (action === 'archive' || action === 'delete') { state.selected = null; state.detail = null; renderDetailPlaceholder(); closeDetailMobile(); }
-    await loadMessages();
-  } catch (error) { toast(error.message, true); }
+  if (['read', 'unread', 'star', 'unstar', 'archive', 'delete'].includes(action)) return performMessageAction(action, message);
 }
 function normalizeTranslationSpacing(value) {
   return String(value || '').replace(/\r\n?/g, '\n').replace(/\u00a0/g, ' ')

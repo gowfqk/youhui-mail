@@ -312,6 +312,7 @@ function renderMessages() {
 }
 function renderDetailPlaceholder() {
   const pane = $('#detailPane'); pane.classList.remove('mobile-open'); pane.classList.add('empty-detail');
+  $('#appView').classList.remove('mobile-reading');
   pane.innerHTML = '<div class="detail-placeholder"><div class="placeholder-icon">✉</div><h2>选一封邮件开始阅读</h2><p>你的邮件会安全地从对应邮箱实时读取。</p></div>';
 }
 function addressText(list = []) { return list.map((x) => x.name ? `${x.name} <${x.address}>` : x.address).join(', '); }
@@ -319,6 +320,7 @@ async function openMessage(index) {
   const message = state.messages[index]; if (!message) return;
   state.selected = message; state.detail = null; updateAIControls(); renderMessages();
   const pane = $('#detailPane'); pane.classList.remove('empty-detail'); pane.classList.add('mobile-open');
+  $('#appView').classList.add('mobile-reading');
   pane.scrollTop = 0;
   pane.innerHTML = '<div class="loading"><span class="spinner"></span>正在读取邮件正文…</div>';
   try {
@@ -373,7 +375,10 @@ function renderDetail(detail, message) {
   } else { const pre = document.createElement('div'); pre.className='mail-body-text'; pre.textContent = detail.text || '(此邮件没有可显示的正文。)'; body.append(pre); }
   $$('[data-action]', pane).forEach((button) => button.addEventListener('click', () => handleDetailAction(button.dataset.action, message, detail)));
 }
-function closeDetailMobile() { $('#detailPane').classList.remove('mobile-open'); }
+function closeDetailMobile() {
+  $('#detailPane').classList.remove('mobile-open');
+  $('#appView').classList.remove('mobile-reading');
+}
 async function handleDetailAction(action, message, detail) {
   if (action === 'back') return closeDetailMobile();
   if (action === 'refresh') return openMessage(state.messages.findIndex((m) => m.uid === message.uid && m.accountId === message.accountId));

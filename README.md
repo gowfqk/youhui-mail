@@ -103,6 +103,14 @@ Webhook 只有在用户填写地址、启用并保存后才会发送新邮件通
 
 Android 原生推送是独立于浏览器通知和 Webhook 的 FCM 通道。服务器通过 FCM HTTP v1 发送只含 `type=mail.new` 的高优先级唤醒消息，不能携带邮件元数据；客户端再使用邮汇登录 Cookie 从 `/api/notifications/events` 拉取事件，详情只在本机生成通知。锁屏公开预览隐藏邮件内容。启用时需在 Firebase 项目打开 Firebase Cloud Messaging API，并将服务账号 JSON 通过 `FCM_SERVICE_ACCOUNT_JSON` 环境变量或安全挂载文件路径 `GOOGLE_APPLICATION_CREDENTIALS` 提供给服务端；不要将私钥提交到源码或镜像。Android 端还需在 `android/app/` 放置 Firebase 为 `com.youhui.mail` 生成的 `google-services.json`，并授予 Android 通知权限。缺少任一端配置时，FCM 不会工作；完整设置步骤见 [`android/README.md`](android/README.md)。
 
+## 移动端原生客户端接入
+
+服务端为原生 App（[`android-native/`](android-native/)，Kotlin + Compose 脚手架）提供三组新增能力，网页版行为不受影响：
+
+- **Bearer 令牌鉴权**：`POST /api/mobile/login`（工作台密码 + 设备 UUID）在响应体返回一次性显示的令牌，客户端以 `Authorization: Bearer <token>` 调用全部 `/api/*`；令牌与网页 Cookie 同表同校验，仅存 SHA-256 摘要。`GET /api/mobile/sessions` 与 `DELETE /api/mobile/sessions/:deviceId` 用于设备会话管理，吊销会级联清理该设备的推送登记。移动端会话按设备记录，闲置时每 5 分钟节流更新一次最近活跃时间。客户端必须将令牌存入 Keystore/EncryptedSharedPreferences，禁止写日志；反向代理不要记录 `Authorization` 头。
+- **附件流式下载**：详情接口新增可选参数 `attachments=meta`，此时附件只返回 `{ index, filename, contentType, size, contentId, inline }` 元数据；省略参数时保持原有 base64 内联行为。`GET /api/message/:accountId/:uid/attachment/:index` 按序号流式返回单个附件，默认 `attachment` 处置；仅当类型属于可信图片白名单且显式传 `disposition=inline` 时才允许内联展示。
+- **OAuth 回环登录（RFC 8252 + PKCE S256）**：`GET /api/mobile/identity/:provider/start` 校验回环地址/私有 scheme 白名单后返回 Provider 授权页地址；`/identity/:provider/callback` 在移动端流验证成功后生成 60 秒一次性 code 并 302 回 App 回环地址；`POST /api/mobile/oauth/exchange` 以 code + code_verifier（PKCE 校验、单次消费）换取移动端会话。第三方身份仍须先在工作台绑定。
+
 ## Agent 邮件访问（MCP）
 
 在工作台“设置 → Agent / MCP”中查看 MCP Streamable HTTP 端点，并按用途分别创建 Bearer 令牌：
@@ -127,3 +135,5 @@ Android 原生推送是独立于浏览器通知和 Webhook 的 FCM 通道。服�
 工作台可在“设置 → 备份与恢复”下载单文件 `.yhbackup` 文件，并可选择使用自己设置的口令加密；未加密备份包含数据库和可解密邮箱凭据的密钥，需妥善保管。加密备份使用 scrypt 派生密钥和 AES-256-GCM 保护整个文件；恢复时需要原密码，遗忘后无法恢复。备份不会保留登录会话。恢复会替换当前工作台全部账户和设置、退出所有会话，并要求使用备份创建时的工作台密码重新登录。系统会在恢复前检查文件格式、SQLite 完整性和加密数据；定期下载并妥善保管备份仍由用户负责。
 
 默认支持 465 端口的 SSL/TLS 和 587 端口的 STARTTLS。若邮箱服务商要求不同端口或主机名，可在连接表单中手动填写。所有账户均在首次连接时进行实时验证；本项目没有预填邮箱、密码或模拟邮件。
+
+> AI生成

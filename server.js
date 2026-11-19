@@ -86,6 +86,10 @@ db.exec(`
     fcm_next_attempt_at INTEGER NOT NULL DEFAULT 0, fcm_delivered_at INTEGER, fcm_abandoned INTEGER NOT NULL DEFAULT 0,
     UNIQUE(account_id, folder, uid_validity, message_uid)
   );
+  CREATE TABLE IF NOT EXISTS mobile_oauth_codes (
+    code_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, device_state_hash TEXT NOT NULL,
+    code_challenge TEXT NOT NULL, expires_at INTEGER NOT NULL, consumed_at INTEGER
+  );
 `);
 // WxPusher has its own retry lifecycle; do not repurpose legacy webhook fields.
 for (const [column, definition] of Object.entries({
@@ -102,6 +106,23 @@ for (const [column, definition] of Object.entries({
 })) {
   if (!db.prepare('PRAGMA table_info(notification_events)').all().some((item) => item.name === column)) {
     db.exec(`ALTER TABLE notification_events ADD COLUMN ${column} ${definition}`);
+  }
+}
+// 移动端会话：kind 区分 web/mobile，device_* 记录设备信息（守卫式迁移，向后兼容）
+for (const [column, definition] of Object.entries({
+  kind: "TEXT NOT NULL DEFAULT 'web'", device_id: 'TEXT', device_label: 'TEXT',
+  created_at: 'INTEGER NOT NULL DEFAULT 0', last_seen_at: 'INTEGER NOT NULL DEFAULT 0'
+})) {
+  if (!db.prepare('PRAGMA table_info(sessions)').all().some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN ${column} ${definition}`);
+  }
+}
+// 第三方登录 mobile 流：redirect_uri（回环/私有 scheme）、PKCE challenge 与 device_state（明文，仅用于回传校验，非秘密）
+for (const [column, definition] of Object.entries({
+  redirect_uri: 'TEXT', code_challenge: 'TEXT', device_state: 'TEXT'
+})) {
+  if (!db.prepare('PRAGMA table_info(identity_oauth_states)').all().some((item) => item.name === column)) {
+    db.exec(`ALTER TABLE identity_oauth_states ADD COLUMN ${column} ${definition}`);
   }
 }
 function recoverPendingRestore() {
@@ -124,6 +145,7 @@ recoverPendingRestore();
 db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
 db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').run(Date.now());
 db.prepare('DELETE FROM identity_oauth_states WHERE expires_at < ?').run(Date.now());
+db.prepare('DELETE FROM mobile_oauth_codes WHERE expires_at < ? OR consumed_at IS NOT NULL').run(Date.now());
 db.prepare('DELETE FROM notification_events WHERE created_at < ?').run(Date.now() - 7 * 24 * 60 * 60_000);
 
 const app = express();
@@ -145,9 +167,24 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '28mb' }));
 app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1h' }));
-app.get('/mail-frame', (req, res, next) => {
+// send 库在 Windows 含非 ASCII 字符（如中文工作空间名）的绝对路径下会误报 NotFound，
+// 改用 fs.readFile 直接读取后发送绕过；express.static 内部走相对路径拼接不受影响。
+function sendLocalFile(res, filePath, contentType) {
+  fs.readFile(filePath, (error, data) => {
+    if (error) {
+      if (!res.headersSent) res.status(error.code === 'ENOENT' ? 404 : 500).json({ error: '文件读取失败。' });
+      return;
+    }
+    if (!res.headersSent) {
+      if (contentType) res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', String(data.length));
+    }
+    res.end(data);
+  });
+}
+app.get('/mail-frame', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.sendFile(path.join(__dirname, 'mail-frame.html'), (error) => { if (error) next(error); });
+  sendLocalFile(res, path.join(__dirname, 'mail-frame.html'), 'text/html; charset=utf-8');
 });
 const hash = (value) => crypto.createHash('sha256').update(value).digest('hex');
 function encrypt(value) {
@@ -183,15 +220,25 @@ function clearSessionCookie(res, req) {
   const secure = req.secure ? '; Secure' : '';
   appendSetCookie(res, `youhui_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure}`);
 }
+function sessionTokenFrom(req) {
+  const header = String(req.get('authorization') || '');
+  const bearer = header.match(/^Bearer\s+([A-Za-z0-9_.\-]+)$/i);
+  if (bearer) return bearer[1]; // 移动端 Bearer 令牌；安全性由令牌本身保证，不依赖 Origin 校验
+  return cookieValue(req, 'youhui_session'); // 网页版 Cookie 不变
+}
 function auth(req, res, next) {
-  const token = cookieValue(req, 'youhui_session');
+  const token = sessionTokenFrom(req);
   if (!token) return res.status(401).json({ error: '请先解锁邮箱工作台。' });
-  const row = db.prepare('SELECT token_hash, expires_at FROM sessions WHERE token_hash = ?').get(hash(token));
+  const row = db.prepare('SELECT token_hash, expires_at, kind, device_id, last_seen_at FROM sessions WHERE token_hash = ?').get(hash(token));
   if (!row || row.expires_at < Date.now()) {
     if (row) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(row.token_hash);
     return res.status(401).json({ error: '登录已过期，请重新解锁。' });
   }
   req.sessionHash = row.token_hash;
+  // 移动端会话节流更新 last_seen_at（避免每请求写库）
+  if (row.kind === 'mobile' && row.device_id && Date.now() - (row.last_seen_at || 0) > 5 * 60_000) {
+    try { db.prepare('UPDATE sessions SET last_seen_at = ? WHERE token_hash = ?').run(Date.now(), row.token_hash); } catch {}
+  }
   next();
 }
 function originGuard(req, res, next) {
@@ -676,7 +723,7 @@ function inlineImageData(attachments = []) {
   }
   return images;
 }
-async function getMailDetail(account, folderKey, uid) {
+async function getMailDetail(account, folderKey, uid, { attachmentsMeta = false } = {}) {
   return withFreshAccount(account, async (fresh) => {
     const client = makeImap(fresh);
     try {
@@ -697,8 +744,32 @@ async function getMailDetail(account, folderKey, uid) {
           to: parsed.to?.value || messageAddress(item.envelope, 'to'), cc: parsed.cc?.value || messageAddress(item.envelope, 'cc'),
           date: parsed.date || item.internalDate || null, text: parsed.text || '', html: cleanHtml,
           messageId: parsed.messageId || '', inReplyTo: parsed.inReplyTo || '', references: parsed.references || '',
-          attachments: (parsed.attachments || []).map((a) => ({ filename: a.filename || 'attachment', contentType: a.contentType || 'application/octet-stream', size: a.size || a.content?.length || 0, content: a.content?.toString('base64') || '' }))
+          attachments: (parsed.attachments || []).map((a, index) => ({
+            index, filename: a.filename || 'attachment', contentType: a.contentType || 'application/octet-stream',
+            size: a.size || a.content?.length || 0, contentId: a.contentId || '',
+            inline: safeInlineImageTypes.has(String(a.contentType || '').split(';')[0].trim().toLowerCase()),
+            ...(attachmentsMeta ? {} : { content: a.content?.toString('base64') || '' })
+          }))
         };
+      } finally { lock.release(); }
+    } finally { try { await client.logout(); } catch {} }
+  });
+}
+async function getMailAttachment(account, folderKey, uid, index) {
+  // v1：整封读入内存后取指定附件；后续可升级为 IMAP partial fetch 流式抓取
+  return withFreshAccount(account, async (fresh) => {
+    const client = makeImap(fresh);
+    try {
+      await client.connect();
+      const pathName = folderKey || 'INBOX';
+      const lock = await client.getMailboxLock(pathName);
+      try {
+        const item = await client.fetchOne(Number(uid), { uid: true, source: true }, { uid: true });
+        if (!item?.source) throw new Error('找不到这封邮件，可能已被移走或删除。');
+        const parsed = await simpleParser(item.source);
+        const attachment = (parsed.attachments || [])[index];
+        if (!attachment?.content) throw new Error('附件不存在或已被移除。');
+        return attachment;
       } finally { lock.release(); }
     } finally { try { await client.logout(); } catch {} }
   });
@@ -812,6 +883,49 @@ app.delete('/api/identity/:provider', auth, (req, res) => {
   if (!loginOAuthProviders.includes(provider)) return res.status(404).json({ error: '不支持此登录方式。' });
   db.prepare('DELETE FROM login_identities WHERE provider = ?').run(provider);
   res.json(publicOAuthConfigStatus(req));
+});
+
+// ---------- 移动端（原生 App）令牌会话 ----------
+const mobileDeviceIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+function cleanDeviceLabel(value) { return String(value || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 80); }
+function isMobileRedirectUri(value) {
+  // RFC 8252 §7.3：仅允许本机回环 http 与 App 私有 scheme，拒绝远程地址防授权码被劫持
+  try {
+    const url = new URL(String(value || ''));
+    if (url.protocol === 'http:' && !url.username && !url.password) {
+      const host = url.hostname;
+      return host === '127.0.0.1' || host === 'localhost' || host === '[::1]' || host === '::1';
+    }
+    return url.protocol === 'com.youhui.mail:';
+  } catch { return false; }
+}
+function insertMobileSession(deviceId, deviceLabel) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  const expires = Date.now() + 30 * 24 * 60 * 60_000;
+  db.prepare(`INSERT INTO sessions (token_hash,expires_at,kind,device_id,device_label,created_at,last_seen_at)
+    VALUES (?,?,?,?,?,?,?)`).run(hash(token), expires, 'mobile', deviceId, deviceLabel, Date.now(), Date.now());
+  return { token, expiresAt: expires, session: { deviceId, deviceLabel, kind: 'mobile' } };
+}
+app.post('/api/mobile/login', (req, res) => {
+  if (!attemptAllowed(req)) return res.status(429).json({ error: '尝试次数过多，请 15 分钟后再试。' });
+  const row = db.prepare('SELECT password_hash FROM app_config WHERE id = 1').get();
+  if (!row) return res.status(409).json({ error: '请先完成首次设置。' });
+  if (!passwordMatches(String(req.body?.password || ''), row.password_hash)) return res.status(401).json({ error: '密码不正确。' });
+  const deviceId = String(req.body?.deviceId || '').trim();
+  if (!mobileDeviceIdPattern.test(deviceId)) return res.status(400).json({ error: '设备标识无效。' });
+  loginAttempts.delete(req.ip || 'unknown');
+  res.json(insertMobileSession(deviceId, cleanDeviceLabel(req.body?.deviceLabel)));
+});
+app.get('/api/mobile/sessions', auth, (req, res) => {
+  const rows = db.prepare(`SELECT device_id, device_label, created_at, last_seen_at, expires_at FROM sessions
+    WHERE kind = 'mobile' AND expires_at > ? ORDER BY created_at DESC`).all(Date.now());
+  res.json({ sessions: rows.map((row) => ({ deviceId: row.device_id, deviceLabel: row.device_label, createdAt: row.created_at, lastSeenAt: row.last_seen_at, expiresAt: row.expires_at })) });
+});
+app.delete('/api/mobile/sessions/:deviceId', auth, (req, res) => {
+  const deviceId = String(req.params.deviceId || '').trim();
+  if (!mobileDeviceIdPattern.test(deviceId)) return res.status(400).json({ error: '设备标识无效。' });
+  db.prepare(`DELETE FROM sessions WHERE kind = 'mobile' AND device_id = ?`).run(deviceId);
+  res.json({ ok: true });
 });
 function getDefaultAccountId() {
   const saved = db.prepare('SELECT value FROM app_preferences WHERE key = ?').get('default_account_id')?.value || '';
@@ -1689,13 +1803,16 @@ app.post('/api/backup/restore', auth, express.raw({ type: 'application/octet-str
     let sourceTables;
     let restoreSourceColumns = new Map();
     const destinationTables = backupTableNames(db);
+    // 会话/临时状态类表在恢复时只清空、不拷贝内容（导出时也会清空），
+    // 其列结构会随版本演进，因此豁免"缺失"与"列结构"严格比对，保证旧备份可恢复。
+    const transientTables = new Set(['sessions', 'oauth_states', 'identity_oauth_states', 'ai_digest_runs', 'push_devices', 'mobile_oauth_codes']);
     try {
       sourceTables = verifyBackupDatabase(candidate, restoredKey);
-      const missingTables = destinationTables.filter((table) => !sourceTables.includes(table) && table !== 'push_devices');
+      const missingTables = destinationTables.filter((table) => !sourceTables.includes(table) && !transientTables.has(table));
       const extraTables = sourceTables.filter((table) => !destinationTables.includes(table));
       if (missingTables.length || extraTables.length) throw new Error('备份文件与当前邮汇版本的数据库结构不一致。');
       for (const tableName of destinationTables) {
-        if (!sourceTables.includes(tableName)) continue;
+        if (!sourceTables.includes(tableName) || transientTables.has(tableName)) continue;
         if (tableName !== 'notification_events' && JSON.stringify(backupTableColumns(db, tableName)) !== JSON.stringify(backupTableColumns(candidate, tableName))) {
           throw new Error('备份文件的数据库结构与当前版本不兼容。');
         }
@@ -1715,7 +1832,6 @@ app.post('/api/backup/restore', auth, express.raw({ type: 'application/octet-str
     pendingWritten = true;
     restoreInProgress = true;
     db.prepare('ATTACH DATABASE ? AS restore_source').run(candidatePath);
-    const transientTables = new Set(['sessions', 'oauth_states', 'identity_oauth_states', 'ai_digest_runs', 'push_devices']);
     const quote = (name) => `"${String(name).replaceAll('"', '""')}"`;
     try {
       db.transaction(() => {
@@ -1815,8 +1931,33 @@ app.get('/api/message/:accountId/:uid', auth, async (req, res) => {
   try {
     const account = getAccount(req.params.accountId);
     if (!account) return res.status(404).json({ error: '找不到此邮箱账户。' });
-    res.json(await getMailDetail(account, String(req.query.folder || 'INBOX').slice(0, 200), req.params.uid));
+    // attachments=meta：只返回附件元数据（移动端），省略时保持网页版 base64 内联行为
+    const attachmentsMeta = String(req.query.attachments || '') === 'meta';
+    res.json(await getMailDetail(account, String(req.query.folder || 'INBOX').slice(0, 200), req.params.uid, { attachmentsMeta }));
   } catch (error) { res.status(400).json({ error: safeError(error) }); }
+});
+app.get('/api/message/:accountId/:uid/attachment/:index', auth, async (req, res) => {
+  try {
+    const account = getAccount(req.params.accountId);
+    if (!account) return res.status(404).json({ error: '找不到此邮箱账户。' });
+    const index = Number(req.params.index);
+    if (!Number.isInteger(index) || index < 0 || index > 99) return res.status(400).json({ error: '附件序号无效。' });
+    const attachment = await getMailAttachment(account, String(req.query.folder || 'INBOX').slice(0, 200), req.params.uid, index);
+    const rawType = String(attachment.contentType || '').split(';')[0].trim().toLowerCase();
+    const contentType = /^[\w.+-]+\/[\w.+-]+$/.test(rawType) ? rawType : 'application/octet-stream';
+    // 仅可信图片类型允许 inline，防止不可信 HTML/SVG 在客户端直接渲染
+    const allowInline = String(req.query.disposition || '') === 'inline' && safeInlineImageTypes.has(contentType);
+    const filename = String(attachment.filename || 'attachment').replace(/[\r\n"\\]/g, '_').slice(0, 180) || 'attachment';
+    const encodedName = encodeURIComponent(filename).replace(/[!'()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `${allowInline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodedName}`);
+    res.setHeader('Cache-Control', 'no-store, private');
+    res.setHeader('Content-Length', String(attachment.content.length));
+    res.end(attachment.content);
+  } catch (error) {
+    if (res.headersSent) return;
+    res.status(400).json({ error: safeError(error) });
+  }
 });
 app.post('/api/message/:accountId/:uid/action', auth, async (req, res) => {
   try {
@@ -1924,6 +2065,61 @@ async function sendMcpMail(account, { to, cc = '', bcc = '', subject = '', text 
   });
 }
 
+// ---------- 移动端 OAuth 回环登录（RFC 8252 + PKCE S256）----------
+app.get('/api/mobile/identity/:provider/start', async (req, res) => {
+  const provider = String(req.params.provider);
+  if (!loginOAuthProviders.includes(provider)) return res.status(404).json({ error: '不支持此登录方式。' });
+  if (!db.prepare('SELECT id FROM app_config WHERE id=1').get()) return res.status(409).json({ error: '请先设置工作台密码。' });
+  if (!boundIdentity(provider)) return res.status(403).json({ error: '此第三方身份尚未绑定，请先使用工作台密码解锁并在设置中绑定。' });
+  const config = getOAuthClientConfig().login[provider];
+  const configured = Boolean(config?.clientId && config?.clientSecret && (provider !== 'cloudflare' || config.configurationUrl));
+  if (!configured) return res.status(400).json({ error: '尚未配置此第三方登录客户端。' });
+  const redirectUri = String(req.query.redirect_uri || '');
+  if (!isMobileRedirectUri(redirectUri)) return res.status(400).json({ error: 'redirect_uri 必须是本机回环地址（http://127.0.0.1、localhost）或邮汇私有 scheme。' });
+  const deviceState = String(req.query.state || '');
+  if (!/^[A-Za-z0-9_\-.]{16,128}$/.test(deviceState)) return res.status(400).json({ error: 'state 参数无效。' });
+  const codeChallenge = String(req.query.code_challenge || '');
+  if (!/^[A-Za-z0-9\-_]{43,128}$/.test(codeChallenge)) return res.status(400).json({ error: 'code_challenge 无效，需要 base64url 编码的 S256 摘要。' });
+  if (String(req.query.code_challenge_method || 'S256').toUpperCase() !== 'S256') return res.status(400).json({ error: '仅支持 S256 的 code_challenge_method。' });
+  try {
+    const state = crypto.randomBytes(32).toString('base64url');
+    const nonce = crypto.randomBytes(32).toString('base64url');
+    let authorizeUrl;
+    if (provider === 'google') authorizeUrl = 'https://accounts.google.com/o/oauth2/v2/auth';
+    else if (provider === 'github') authorizeUrl = 'https://github.com/login/oauth/authorize';
+    else authorizeUrl = (await loadCloudflareOidcMetadata(config)).authorization_endpoint;
+    db.prepare(`INSERT INTO identity_oauth_states
+      (state_hash,provider,flow,session_hash,browser_hash,nonce,expires_at,redirect_uri,code_challenge,device_state)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .run(hash(state), provider, 'mobile', null, '', nonce, Date.now() + 10 * 60_000, redirectUri.slice(0, 2000), codeChallenge, deviceState.slice(0, 128));
+    const url = new URL(authorizeUrl);
+    url.searchParams.set('client_id', config.clientId);
+    url.searchParams.set('redirect_uri', identityCallbackUrl(req, provider));
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('scope', provider === 'github' ? 'read:user' : 'openid email profile');
+    url.searchParams.set('state', state);
+    if (provider !== 'github') url.searchParams.set('nonce', nonce);
+    if (provider === 'google') url.searchParams.set('prompt', 'select_account');
+    res.json({ url: url.toString() });
+  } catch (error) { res.status(400).json({ error: safeError(error) }); }
+});
+app.post('/api/mobile/oauth/exchange', (req, res) => {
+  const code = String(req.body?.code || '');
+  const codeVerifier = String(req.body?.codeVerifier || '');
+  const deviceId = String(req.body?.deviceId || '').trim();
+  if (!/^[A-Za-z0-9_\-.]{16,256}$/.test(code)) return res.status(400).json({ error: '一次性授权码无效。' });
+  if (!/^[A-Za-z0-9\-._~]{43,128}$/.test(codeVerifier)) return res.status(400).json({ error: 'code_verifier 格式无效。' });
+  if (!mobileDeviceIdPattern.test(deviceId)) return res.status(400).json({ error: '设备标识无效。' });
+  const record = db.prepare('SELECT * FROM mobile_oauth_codes WHERE code_hash = ?').get(hash(code));
+  if (!record || record.expires_at < Date.now()) return res.status(400).json({ error: '授权码已过期，请重新发起登录。' });
+  const expectedChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+  if (!constantTimeTextEqual(record.code_challenge, expectedChallenge)) return res.status(400).json({ error: 'PKCE 校验失败，请重新发起登录。' });
+  // 单次消费：原子 UPDATE 防重放
+  const consume = db.prepare('UPDATE mobile_oauth_codes SET consumed_at = ? WHERE code_hash = ? AND consumed_at IS NULL').run(Date.now(), record.code_hash);
+  if (consume.changes !== 1) return res.status(400).json({ error: '授权码已被使用，请重新发起登录。' });
+  res.json(insertMobileSession(deviceId, cleanDeviceLabel(req.body?.deviceLabel)));
+});
+
 app.get('/api/identity/:provider/start', (req, res, next) => {
   if (req.query.flow === 'bind') return auth(req, res, next);
   next();
@@ -1974,8 +2170,9 @@ app.get('/identity/:provider/callback', async (req, res) => {
   const sessionToken = cookieValue(req, 'youhui_session');
   const session = sessionToken ? db.prepare('SELECT token_hash,expires_at FROM sessions WHERE token_hash=?').get(hash(sessionToken)) : null;
   const activeSessionHash = session && session.expires_at > Date.now() ? session.token_hash : '';
-  const stateValid = pending && pending.expires_at > Date.now() && constantTimeTextEqual(pending.browser_hash, browserHash) &&
-    (pending.flow === 'bind' ? constantTimeTextEqual(pending.session_hash, activeSessionHash) : !activeSessionHash);
+  const stateValid = pending && pending.expires_at > Date.now() && (pending.flow === 'mobile' ||
+    (constantTimeTextEqual(pending.browser_hash, browserHash) &&
+    (pending.flow === 'bind' ? constantTimeTextEqual(pending.session_hash, activeSessionHash) : !activeSessionHash)));
   clearOAuthFlowCookie(res, req);
   if (!stateValid) {
     if (pending) db.prepare('DELETE FROM identity_oauth_states WHERE state_hash=?').run(pending.state_hash);
@@ -1987,6 +2184,21 @@ app.get('/identity/:provider/callback', async (req, res) => {
     const config = getOAuthClientConfig().login[provider];
     const profile = await authenticateLoginProvider(provider, req.query.code, req, pending, config);
     const subjectHash = loginSubjectHash(provider, profile.subject);
+    if (pending.flow === 'mobile') {
+      // 移动端流：验证身份后生成一次性 code（TTL 60s、单次、绑定 deviceState），302 回 App 回环地址
+      const savedMobile = db.prepare('SELECT subject_hash FROM login_identities WHERE provider=?').get(provider);
+      const mobileState = encodeURIComponent(String(pending.device_state || '').slice(0, 128));
+      if (!savedMobile || !constantTimeTextEqual(savedMobile.subject_hash, subjectHash)) {
+        return res.redirect(`${pending.redirect_uri}${pending.redirect_uri.includes('?') ? '&' : '?'}error=unbound&state=${mobileState}`);
+      }
+      const oneTimeCode = crypto.randomBytes(32).toString('base64url');
+      db.prepare(`INSERT INTO mobile_oauth_codes (code_hash,provider,device_state_hash,code_challenge,expires_at)
+        VALUES (?,?,?,?,?)`).run(hash(oneTimeCode), provider, hash(pending.device_state || ''), pending.code_challenge || '', Date.now() + 60_000);
+      const loopback = new URL(pending.redirect_uri);
+      loopback.searchParams.set('code', oneTimeCode);
+      loopback.searchParams.set('state', String(pending.device_state || '').slice(0, 128));
+      return res.redirect(loopback.toString());
+    }
     if (pending.flow === 'bind') {
       const stillActive = db.prepare('SELECT 1 FROM sessions WHERE token_hash=? AND expires_at>?').get(pending.session_hash, Date.now());
       if (!stillActive || hash(cookieValue(req, 'youhui_session')) !== pending.session_hash) return res.redirect('/?identity_error=session');
@@ -2055,7 +2267,7 @@ app.get('/api/oauth/:provider/start', auth, (req, res) => {
 });
 attachAI({ app, auth, db, encrypt, decrypt, mapAccount, withFreshAccount, makeImap, simpleParser });
 attachMcp({ app, auth, db, hash, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage: sendMcpMail, safeError });
-app.get('*path', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('*path', (req, res) => sendLocalFile(res, path.join(__dirname, 'public', 'index.html'), 'text/html; charset=utf-8'));
 app.use((error, req, res, next) => {
   console.error(error);
   if (res.headersSent) return next(error);

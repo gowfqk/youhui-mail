@@ -105,11 +105,11 @@ Android 原生推送是独立于浏览器通知和 Webhook 的 FCM 通道。服�
 
 ## 移动端原生客户端接入
 
-服务端为原生 App（[`android-native/`](android-native/)，Kotlin + Compose 脚手架）提供三组新增能力，网页版行为不受影响：
+服务端提供供移动客户端使用的接口；本仓库当前不包含 Android 原生客户端源码。以下 API 不改变网页版行为：
 
-- **Bearer 令牌鉴权**：`POST /api/mobile/login`（工作台密码 + 设备 UUID）在响应体返回一次性显示的令牌，客户端以 `Authorization: Bearer <token>` 调用全部 `/api/*`；令牌与网页 Cookie 同表同校验，仅存 SHA-256 摘要。`GET /api/mobile/sessions` 与 `DELETE /api/mobile/sessions/:deviceId` 用于设备会话管理，吊销会级联清理该设备的推送登记。移动端会话按设备记录，闲置时每 5 分钟节流更新一次最近活跃时间。客户端必须将令牌存入 Keystore/EncryptedSharedPreferences，禁止写日志；反向代理不要记录 `Authorization` 头。
-- **附件流式下载**：详情接口新增可选参数 `attachments=meta`，此时附件只返回 `{ index, filename, contentType, size, contentId, inline }` 元数据；省略参数时保持原有 base64 内联行为。`GET /api/message/:accountId/:uid/attachment/:index` 按序号流式返回单个附件，默认 `attachment` 处置；仅当类型属于可信图片白名单且显式传 `disposition=inline` 时才允许内联展示。
-- **OAuth 回环登录（RFC 8252 + PKCE S256）**：`GET /api/mobile/identity/:provider/start` 校验回环地址/私有 scheme 白名单后返回 Provider 授权页地址；`/identity/:provider/callback` 在移动端流验证成功后生成 60 秒一次性 code 并 302 回 App 回环地址；`POST /api/mobile/oauth/exchange` 以 code + code_verifier（PKCE 校验、单次消费）换取移动端会话。第三方身份仍须先在工作台绑定。
+- **Bearer 令牌鉴权**：`POST /api/mobile/login`（工作台密码 + 设备 UUID）在响应体返回一次性显示的令牌，客户端以 `Authorization: Bearer <token>` 调用受保护的 `/api/*` 接口；令牌与网页 Cookie 共用会话校验，仅存 SHA-256 摘要。`GET /api/mobile/sessions` 与 `DELETE /api/mobile/sessions/:deviceId` 用于设备会话管理，吊销会级联清理该设备的推送登记。移动端会话有效期 30 天，闲置时每 5 分钟节流更新一次最近活跃时间。客户端必须将令牌存入 Keystore/EncryptedSharedPreferences，禁止写日志；反向代理不要记录 `Authorization` 头。
+- **附件下载**：详情接口新增可选参数 `attachments=meta`，此时附件只返回 `{ index, filename, contentType, size, contentId, inline }` 元数据；省略参数时保持原有 base64 内联行为。`GET /api/message/:accountId/:uid/attachment/:index` 按序号下载单个附件，默认作为附件下载；仅当类型属于可信图片白名单且显式传 `disposition=inline` 时才允许内联展示。当前服务端会先读取并解析整封邮件再返回附件，并非从 IMAP 到客户端的真正流式传输，大邮件可能占用较多内存。
+- **OAuth 回环登录（RFC 8252 + PKCE S256）**：`GET /api/mobile/identity/:provider/start` 校验回环地址/私有 scheme 白名单后返回 Provider 授权页地址；`/identity/:provider/callback` 在移动端流验证成功后生成 60 秒一次性 code，并将 `code` 和 `state` 302 回 App 回环地址。客户端应先核对返回的 `state` 与发起登录时保存的值，再将 `{ code, state, codeVerifier, deviceId }` 提交到 `POST /api/mobile/oauth/exchange`；服务端会校验与授权码绑定的 `state` 哈希及 PKCE S256，并且授权码只能兑换一次。第三方身份仍须先在工作台绑定。
 
 ## Agent 邮件访问（MCP）
 
@@ -135,5 +135,3 @@ Android 原生推送是独立于浏览器通知和 Webhook 的 FCM 通道。服�
 工作台可在“设置 → 备份与恢复”下载单文件 `.yhbackup` 文件，并可选择使用自己设置的口令加密；未加密备份包含数据库和可解密邮箱凭据的密钥，需妥善保管。加密备份使用 scrypt 派生密钥和 AES-256-GCM 保护整个文件；恢复时需要原密码，遗忘后无法恢复。备份不会保留登录会话。恢复会替换当前工作台全部账户和设置、退出所有会话，并要求使用备份创建时的工作台密码重新登录。系统会在恢复前检查文件格式、SQLite 完整性和加密数据；定期下载并妥善保管备份仍由用户负责。
 
 默认支持 465 端口的 SSL/TLS 和 587 端口的 STARTTLS。若邮箱服务商要求不同端口或主机名，可在连接表单中手动填写。所有账户均在首次连接时进行实时验证；本项目没有预填邮箱、密码或模拟邮件。
-
-> AI生成

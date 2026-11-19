@@ -2105,13 +2105,16 @@ app.get('/api/mobile/identity/:provider/start', async (req, res) => {
 });
 app.post('/api/mobile/oauth/exchange', (req, res) => {
   const code = String(req.body?.code || '');
+  const deviceState = String(req.body?.state || '');
   const codeVerifier = String(req.body?.codeVerifier || '');
   const deviceId = String(req.body?.deviceId || '').trim();
   if (!/^[A-Za-z0-9_\-.]{16,256}$/.test(code)) return res.status(400).json({ error: '一次性授权码无效。' });
+  if (!/^[A-Za-z0-9_\-.]{16,128}$/.test(deviceState)) return res.status(400).json({ error: 'state 参数无效。' });
   if (!/^[A-Za-z0-9\-._~]{43,128}$/.test(codeVerifier)) return res.status(400).json({ error: 'code_verifier 格式无效。' });
   if (!mobileDeviceIdPattern.test(deviceId)) return res.status(400).json({ error: '设备标识无效。' });
   const record = db.prepare('SELECT * FROM mobile_oauth_codes WHERE code_hash = ?').get(hash(code));
   if (!record || record.expires_at < Date.now()) return res.status(400).json({ error: '授权码已过期，请重新发起登录。' });
+  if (!constantTimeTextEqual(record.device_state_hash, hash(deviceState))) return res.status(400).json({ error: 'state 校验失败，请重新发起登录。' });
   const expectedChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
   if (!constantTimeTextEqual(record.code_challenge, expectedChallenge)) return res.status(400).json({ error: 'PKCE 校验失败，请重新发起登录。' });
   // 单次消费：原子 UPDATE 防重放

@@ -96,7 +96,7 @@ export function sanitizeEmailHtml(input, inlineImages = new Map()) {
       td: ['colspan','rowspan'],
       th: ['colspan','rowspan'],
       font: ['color','size','face'],
-      img: ['src','alt','title','width','height','data-external-src']
+      img: ['src','alt','title','width','height','data-external-src','data-cid-src']
     },
     allowedStyles: { '*': safeStyles },
     allowedSchemes: ['http','https','mailto'],
@@ -112,8 +112,14 @@ export function sanitizeEmailHtml(input, inlineImages = new Map()) {
         delete safeAttributes['data-external-src'];
         if (/^cid:/i.test(source)) {
           const inlineSource = inlineImages.get(normalizeContentId(source));
-          if (inlineSource) safeAttributes.src = inlineSource;
-          else delete safeAttributes.src;
+          if (inlineSource) {
+            safeAttributes.src = inlineSource;
+          } else {
+            // cid 引用超出内联预算（>2MB/张或>6MB 总量）或缺 content：
+            // 保留标记，由客户端从附件端点按 disposition=inline 取回后回填，避免正文空白
+            delete safeAttributes.src;
+            safeAttributes['data-cid-src'] = source;
+          }
         } else if (/^https?:\/\//i.test(source)) {
           safeAttributes['data-external-src'] = source;
           delete safeAttributes.src;

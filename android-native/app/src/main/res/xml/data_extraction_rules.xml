@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="youhui_secure_prefs.xml" />
+        <exclude domain="sharedpref" path="youhui_prefs.xml" />
+        <exclude domain="sharedpref" path="youhui_push.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="youhui_secure_prefs.xml" />
+        <exclude domain="sharedpref" path="youhui_prefs.xml" />
+        <exclude domain="sharedpref" path="youhui_push.xml" />
+    </device-transfer>
+</data-extraction-rules>

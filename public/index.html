@@ -14,8 +14,8 @@
   <link rel="stylesheet" href="/brand-icon-8631112507a5.css">
   <script src="/mail-list-cache-ac9b47cad340.js" defer></script>
   <script src="/message-context-actions-d7ff3ca0c130.js" defer></script>
-  <script src="/i18n-en-fad3892dcb96.js" defer></script>
-  <script src="/app-d726eace43de.js" defer></script>
+  <script src="/i18n-en-5f1272de194f.js" defer></script>
+  <script src="/app-db1d27570e28.js" defer></script>
 </head>
 <body>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -359,6 +359,10 @@
       <textarea id="composeBody" class="compose-body" placeholder="写下你想说的话…"></textarea>
       <div class="compose-tools"><label class="attach-button" for="composeFiles">＋ 添加附件<input id="composeFiles" type="file" multiple></label><div id="composeFileList" class="compose-file-list"></div><small>最多 10 个文件，合计不超过 18 MB</small></div>
       <div id="composeError" class="form-error hidden"></div>
+      <div class="compose-schedule-row" style="display:flex;gap:8px;align-items:center;padding:4px 0">
+        <label style="display:flex;gap:6px;align-items:center;cursor:pointer"><input id="scheduleEnabled" type="checkbox" style="accent-color:#0b5c56"><span style="font-size:13px">定时发送</span></label>
+        <input id="scheduleTime" type="datetime-local" style="flex:1;min-width:180px;font-size:13px" disabled>
+      </div>
       <div class="compose-footer"><span class="compose-from-note">将从所选邮箱通过 SMTP 发送</span><button id="sendButton" class="button button-primary" type="submit"><span>发送邮件</span><span>↗</span></button></div>
     </form>
   </dialog>

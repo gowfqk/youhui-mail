@@ -557,6 +557,10 @@ window.YouhuiI18n = { en: {
 '移到垃圾箱？': 'Move to Trash?',
 // ---- EML 导出 ----
 '导出为 .eml 文件': 'Export as .eml file',
+// ---- 定时发送 ----
+'定时发送': 'Scheduled send',
+'定时发送时间无效，请选择未来时间。': 'Invalid schedule time — choose a future time.',
+'定时发送已安排。': 'Scheduled send confirmed.',
 // ---- 覆盖检查补齐 ----
 '登录密码只用于解锁此工作台。': 'The password only unlocks this workbench.',
 '其他文件夹': 'Other folders',

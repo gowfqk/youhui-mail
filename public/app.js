@@ -759,13 +759,22 @@ $('#composeForm').addEventListener('submit', async (event) => {
   if (composeIsReply && composeReplyMeta) { payload.inReplyTo = composeReplyMeta.inReplyTo; payload.references = composeReplyMeta.references; }
   else if (detail && composeIsReply) { payload.inReplyTo = detail.messageId || detail.inReplyTo; payload.references = [detail.references, detail.messageId].filter(Boolean).join(' '); }
   try {
+    if ($('#scheduleEnabled')?.checked) {
+      const scheduledAt = new Date($('#scheduleTime').value).getTime();
+      if (!scheduledAt || scheduledAt <= Date.now()) { $('#composeError').textContent = L('定时发送时间无效，请选择未来时间。'); $('#composeError').classList.remove('hidden'); return; }
+      payload.scheduledAt = scheduledAt;
+      const result = await api('/api/schedule', { method:'POST', body:JSON.stringify(payload) });
+      $('#composeDialog').close(); toast(L('定时发送已安排。')); composeFiles = []; renderComposeFiles();
+      return;
+    }
     const result = await api('/api/send', { method:'POST', body:JSON.stringify(payload) });
-    $('#composeDialog').close(); toast(result.warning || result.message || '邮件已发送。', Boolean(result.warning)); composeFiles = []; renderComposeFiles();
+    $('#composeDialog').close(); toast(result.warning || result.message || L('邮件已发送。'), Boolean(result.warning)); composeFiles = []; renderComposeFiles();
     if (state.folder === 'Sent') await loadMessages();
   } catch (error) { $('#composeError').textContent = error.message; $('#composeError').classList.remove('hidden'); }
   finally { button.disabled = false; button.innerHTML = `<span>${L('发送邮件')}</span><span>↗</span>`; }
 });
 $('#composeMinimize').addEventListener('click', () => $('#composeDialog').close());
+$('#scheduleEnabled').addEventListener('change', (e) => { $('#scheduleTime').disabled = !e.target.checked; });
 $('#composeFiles').addEventListener('change', async (event) => {
   const files = [...event.target.files]; event.target.value = '';
   const currentBytes = composeFiles.reduce((sum, file) => sum + file.size, 0);

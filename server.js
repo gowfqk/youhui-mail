@@ -80,6 +80,12 @@ db.exec(`
     fcm_next_attempt_at INTEGER NOT NULL DEFAULT 0, fcm_delivered_at INTEGER, fcm_abandoned INTEGER NOT NULL DEFAULT 0,
     UNIQUE(account_id, folder, uid_validity, message_uid)
   );
+  CREATE TABLE IF NOT EXISTS scheduled_emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    to_addr TEXT NOT NULL, cc TEXT DEFAULT '', subject TEXT DEFAULT '', body TEXT DEFAULT '',
+    scheduled_at INTEGER NOT NULL, sent_at INTEGER, created_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_emails(scheduled_at) WHERE sent_at IS NULL;
   CREATE TABLE IF NOT EXISTS mobile_oauth_codes (
     code_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, device_state_hash TEXT NOT NULL,
     code_challenge TEXT NOT NULL, expires_at INTEGER NOT NULL, consumed_at INTEGER
@@ -1586,6 +1592,7 @@ function scheduleNotificationSweep(delay = 120_000) {
         await deliverPendingWebhooks(config);
         await deliverPendingWxPusher(config);
         await deliverPendingFcm(config);
+        await deliverScheduledEmails();
       }
     } catch (error) { console.warn('New-mail notification sweep failed:', safeError(error)); }
     finally {
@@ -2130,6 +2137,56 @@ app.post('/api/send', auth, async (req, res) => {
     res.json({ ok: true, sentCopySaved: sendResult.sentCopySaved, message: '邮件已发送。', warning: sendResult.sentCopySaved ? '' : '邮件已发送，但此邮箱的“已发送”副本未能自动保存。' });
   } catch (error) { res.status(400).json({ error: safeError(error) }); }
 });
+
+app.post('/api/schedule', auth, async (req, res) => {
+  try {
+    const account = getAccount(String(req.body?.accountId || ''));
+    if (!account) return res.status(404).json({ error: '请选择发件邮箱。' });
+    const to = String(req.body?.to || '').trim();
+    if (!to) return res.status(400).json({ error: '请填写收件人。' });
+    const subject = String(req.body?.subject || '');
+    const body = String(req.body?.body || '').slice(0, 500_000);
+    if (!subject.trim() && !body.trim()) return res.status(400).json({ error: '邮件主题和正文不能同时为空。' });
+    const cc = String(req.body?.cc || '');
+    const scheduledAt = Number(req.body?.scheduledAt);
+    if (!Number.isSafeInteger(scheduledAt) || scheduledAt <= Date.now() || scheduledAt > Date.now() + 365 * 24 * 60 * 60_000) {
+      return res.status(400).json({ error: '定时发送时间必须在当前时间到一年之间。' });
+    }
+    const result = db.prepare('INSERT INTO scheduled_emails (account_id,to_addr,cc,subject,body,scheduled_at,created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(account.id, to, cc, subject.slice(0, 998), body, scheduledAt, Date.now());
+    res.json({ ok: true, id: result.lastInsertRowid, scheduledAt });
+  } catch (error) { res.status(400).json({ error: safeError(error) }); }
+});
+app.get('/api/scheduled', auth, (req, res) => {
+  const rows = db.prepare('SELECT s.id, s.to_addr, s.cc, s.subject, s.scheduled_at, s.sent_at, a.label AS account_label, a.email AS account_email FROM scheduled_emails s JOIN accounts a ON a.id = s.account_id ORDER BY s.scheduled_at ASC LIMIT 100').all();
+  res.json({ scheduled: rows.map((r) => ({ id: r.id, to: r.to_addr, cc: r.cc, subject: r.subject, scheduledAt: r.scheduled_at, sentAt: r.sent_at, accountLabel: r.account_label, accountEmail: r.account_email })) });
+});
+app.delete('/api/scheduled/:id', auth, (req, res) => {
+  const result = db.prepare('DELETE FROM scheduled_emails WHERE id = ? AND sent_at IS NULL').run(Number(req.params.id));
+  if (!result.changes) return res.status(404).json({ error: '找不到该定时邮件或已发送。' });
+  res.json({ ok: true });
+});
+
+async function deliverScheduledEmails() {
+  const due = db.prepare('SELECT s.*, a.imap_host, a.smtp_host FROM scheduled_emails s JOIN accounts a ON a.id = s.account_id WHERE s.sent_at IS NULL AND s.scheduled_at <= ? ORDER BY s.scheduled_at ASC LIMIT 5').all(Date.now());
+  for (const row of due) {
+    const account = getAccount(row.account_id);
+    if (!account) { db.prepare('UPDATE scheduled_emails SET sent_at = ? WHERE id = ?').run(Date.now(), row.id); continue; }
+    try {
+      await withFreshAccount(account, async (fresh) => {
+        const transport = makeSmtp(fresh);
+        try {
+          await transport.sendMail({ from: { name: fresh.label, address: fresh.email }, to: row.to_addr, cc: row.cc, subject: row.subject, text: row.body });
+        } finally { transport.close(); }
+      });
+      db.prepare('UPDATE scheduled_emails SET sent_at = ? WHERE id = ?').run(Date.now(), row.id);
+    } catch (error) {
+      const attempts = row.attempts + 1;
+      if (attempts >= 3) { db.prepare('UPDATE scheduled_emails SET sent_at = ?, attempts = ? WHERE id = ?').run(Date.now(), attempts, row.id); console.warn(`Scheduled email ${row.id} abandoned after ${attempts} attempts`); }
+      else { db.prepare('UPDATE scheduled_emails SET attempts = ? WHERE id = ?').run(attempts, row.id); console.warn(`Scheduled email ${row.id} attempt ${attempts} failed`); }
+    }
+  }
+}
 
 async function sendMcpMail(account, { to, cc = '', bcc = '', subject = '', text = '' }) {
   return withFreshAccount(account, async (fresh) => {

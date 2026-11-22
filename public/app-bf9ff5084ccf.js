@@ -1,5 +1,5 @@
 const state = {
-  status: null, accounts: [], defaultAccountId: '', folders: [], folder: 'INBOX', accountId: 'all', page: 1, query: '',
+  status: null, accounts: [], defaultAccountId: '', folders: [], folder: 'INBOX', accountId: 'all', cursor: null, cursorStack: [], query: '',
   messages: [], total: 0, selected: null, detail: null, olderFirst: false, busy: false, searchTimer: null, mailListRequestId: 0,
   aiConfig: null, translationConfig: null, notificationConfig: null, oauthConfig: null, mcpConfig: null, aiMessages: [], aiContext: null, aiBusy: false
 };
@@ -190,7 +190,7 @@ function renderCustomFolders() {
   const knownNames = new Set(['inbox','sent','sent items','已发送','已发邮件','draft','drafts','草稿','archive','all mail','所有邮件','归档','trash','deleted items','deleted messages','已删除','垃圾箱','junk','spam','bulk','垃圾邮件']);
   const items = state.folders.filter((f) => !knownNames.has(String(f.name || f.path).split('/').at(-1).toLowerCase()) && String(f.path).toUpperCase() !== 'INBOX');
   root.innerHTML = items.length ? `<div class="custom-label">其他文件夹</div>` + items.map((f) => `<button class="nav-item custom-folder-item ${state.folder === f.path && state.accountId === f.accountId ? 'active' : ''}" data-custom-path="${escapeHtml(f.path)}" data-account="${escapeHtml(f.accountId)}" title="${escapeHtml(f.path)}"><span class="nav-icon">▤</span><span class="account-label">${escapeHtml(f.name || f.path)}</span><small class="custom-account-label">${escapeHtml(f.accountEmail)}</small></button>`).join('') : '';
-  root.querySelectorAll('[data-custom-path]').forEach((button) => button.addEventListener('click', () => { state.folder=button.dataset.customPath; state.accountId=button.dataset.account; state.page=1; state.selected=null; state.detail=null; renderTitles(); renderAccountFilter(); renderAccountNav(); renderCustomFolders(); renderDetailPlaceholder(); loadMessages(); closeSidebar(); }));
+  root.querySelectorAll('[data-custom-path]').forEach((button) => button.addEventListener('click', () => { state.folder=button.dataset.customPath; state.accountId=button.dataset.account; state.cursor=null;state.cursorStack.length=0; state.selected=null; state.detail=null; renderTitles(); renderAccountFilter(); renderAccountNav(); renderCustomFolders(); renderDetailPlaceholder(); loadMessages(); closeSidebar(); }));
 }
 function renderAccountNav() {
   const root = $('#accountNav');
@@ -218,7 +218,7 @@ function renderComposeAccounts(preferred = '') {
   else if (state.accountId !== 'all' && state.accounts.some((a) => a.id === state.accountId)) select.value = state.accountId;
 }
 function setFolder(folder) {
-  state.folder = folder; state.page = 1; state.selected = null; state.detail = null;
+  state.folder = folder; state.cursor = null; state.cursorStack.length = 0; state.selected = null; state.detail = null;
   $$('.folder-nav .nav-item').forEach((button) => button.classList.toggle('active', button.dataset.folder === folder));
   renderTitles(); renderDetailPlaceholder(); loadMessages();
 }
@@ -253,21 +253,27 @@ function renderMessageListData(data, source) {
   if (state.olderFirst) state.messages.reverse();
   if (!state.messages.length) renderEmpty();
   else { $('#listEmpty').classList.add('hidden'); renderMessages(); }
-  const hasPages = state.total > 30 || state.page > 1;
+  const hasPages = state.cursorStack.length > 0 || state.messages.length >= 31;
   $('#listPagination').classList.toggle('hidden', !hasPages);
-  $('#pageLabel').textContent = `第 ${state.page} 页`;
-  $('#prevPage').disabled = state.page <= 1;
-  $('#nextPage').disabled = state.total <= state.page * 30;
+  $('#pageLabel').textContent = `第 ${state.cursorStack.length + 1} 页`;
+  $('#prevPage').disabled = !state.cursorStack.length;
+  $('#nextPage').disabled = state.messages.length < 31;
+}
+function currentListScope() {
+  // page 字段承载游标键，让缓存按"第一页/各游标页"区分
+  return { accountId: state.accountId, folder: state.folder, page: state.cursor ? `u${state.cursor}` : 1, query: state.query };
 }
 async function loadMessages() {
   if ($('#appView').classList.contains('hidden')) return;
-  const scope = { accountId:state.accountId, folder:state.folder, page:state.page, query:state.query };
+  const scope = currentListScope();
   const requestId = ++state.mailListRequestId;
   const list = $('#messageList');
   let hasCachedList = false;
   $('#listEmpty').classList.add('hidden'); $('#syncBanner').classList.add('hidden');
-  const params = new URLSearchParams({ folder:scope.folder, accountId:scope.accountId, page:String(scope.page), limit:'30' });
+  // 每页多取 1 封用于判断是否还有下一页；翻页用 beforeUid 游标，避免新邮件导致跨页重复
+  const params = new URLSearchParams({ folder:scope.folder, accountId:scope.accountId, limit:'31' });
   if (state.query) params.set('q', state.query);
+  if (state.cursor) params.set('beforeUid', String(state.cursor));
   try {
     const refresh = mailListCache.load(scope, () => api(`/api/mail?${params}`), (data, source) => {
       if (requestId !== state.mailListRequestId) return;
@@ -422,7 +428,7 @@ function openMessageContextMenu(message, trigger, x, y) {
 function writeCurrentMessageListCache() {
   const messages = state.olderFirst ? [...state.messages].reverse() : [...state.messages];
   mailListCache.write(
-    { accountId: state.accountId, folder: state.folder, page: state.page, query: state.query },
+    currentListScope(),
     { messages, total: state.total }
   );
 }
@@ -763,7 +769,7 @@ $('#saveDefaultMailbox').addEventListener('click', async () => {
     state.defaultAccountId = result.defaultAccountId || '';
     updateNotificationScopeNote();
     if (state.folder === 'INBOX') {
-      state.accountId = state.defaultAccountId || 'all'; state.page = 1; state.selected = null; state.detail = null;
+      state.accountId = state.defaultAccountId || 'all'; state.cursor = null; state.cursorStack.length = 0; state.selected = null; state.detail = null;
       renderAccountNav(); renderAccountFilter(); renderDetailPlaceholder(); await loadMessages();
     }
     renderDefaultMailbox(); status.textContent = state.defaultAccountId ? '已保存；刷新或重新进入时会默认显示此邮箱的收件箱。' : '已清除默认邮箱设置。';
@@ -878,19 +884,19 @@ $$('dialog').forEach(dialog=>dialog.addEventListener('click',event=>{if(event.ta
 
 $('#refreshButton').addEventListener('click',async()=>{
   if (state.folder === 'INBOX' && state.defaultAccountId && state.accountId !== state.defaultAccountId) {
-    state.accountId = state.defaultAccountId; state.page = 1; state.selected = null; state.detail = null;
+    state.accountId = state.defaultAccountId; state.cursor = null; state.cursorStack.length = 0; state.selected = null; state.detail = null;
     renderAccountNav(); renderAccountFilter(); renderDetailPlaceholder();
   }
   await loadFolders(); await loadMessages(); toast('已从邮箱服务器刷新。');
 });
-$('#accountFilter').addEventListener('change',event=>{state.accountId=event.target.value;state.page=1;renderAccountNav();loadMessages();});
-$('#accountNav').addEventListener('click',event=>{const button=event.target.closest('[data-account]');if(!button)return;state.accountId=button.dataset.account;state.page=1;renderAccountFilter();renderAccountNav();loadMessages();});
+$('#accountFilter').addEventListener('change',event=>{state.accountId=event.target.value;state.cursor=null;state.cursorStack.length=0;renderAccountNav();loadMessages();});
+$('#accountNav').addEventListener('click',event=>{const button=event.target.closest('[data-account]');if(!button)return;state.accountId=button.dataset.account;state.cursor=null;state.cursorStack.length=0;renderAccountFilter();renderAccountNav();loadMessages();});
 $$('.folder-nav [data-folder]').forEach(button=>button.addEventListener('click',()=>setFolder(button.dataset.folder)));
-$('#searchInput').addEventListener('input',event=>{clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.page=1;state.searchTimer=setTimeout(loadMessages,350);});
-$('#searchInput').addEventListener('keydown',event=>{if(event.key==='Enter'){clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.page=1;loadMessages();}});
+$('#searchInput').addEventListener('input',event=>{clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.cursor=null;state.cursorStack.length=0;state.searchTimer=setTimeout(loadMessages,350);});
+$('#searchInput').addEventListener('keydown',event=>{if(event.key==='Enter'){clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.cursor=null;state.cursorStack.length=0;loadMessages();}});
 $('#sortButton').addEventListener('click',()=>{state.olderFirst=!state.olderFirst;renderMessages();});
-$('#prevPage').addEventListener('click',()=>{if(state.page>1){state.page--;state.selected=null;loadMessages();}});
-$('#nextPage').addEventListener('click',()=>{if(state.total>state.page*30){state.page++;state.selected=null;loadMessages();}});
+$('#prevPage').addEventListener('click',()=>{if(state.cursorStack.length){state.cursor=state.cursorStack.pop();state.selected=null;loadMessages();}});
+$('#nextPage').addEventListener('click',()=>{if(state.messages.length>=31){state.cursorStack.push(state.cursor);state.cursor=Math.min(...state.messages.map((message)=>Number(message.uid)||Number.MAX_SAFE_INTEGER));state.selected=null;loadMessages();}});
 $('#logoutButton').addEventListener('click',async()=>{try{await api('/api/logout',{method:'POST'});}catch{}state.accounts=[];state.selected=null;state.detail=null;state.aiConfig=null;state.translationConfig=null;state.aiMessages=[];state.aiContext=null;state.status={...(state.status||{}),authenticated:false};closeAIChat(false);showAuth();toast('工作台已锁定。');});
 $('#mobileMenu').addEventListener('click',()=>{$('#sidebar').classList.add('open');$('#sidebarShade').classList.add('visible');});
 $('#mobileCloseSidebar').addEventListener('click',closeSidebar);$('#sidebarShade').addEventListener('click',closeSidebar);

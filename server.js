@@ -4,11 +4,12 @@ import Database from 'better-sqlite3';
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
 import { simpleParser } from 'mailparser';
-import { sanitizeEmailHtml } from './email-html.js';
+import { sanitizeEmailHtml, normalizeContentId } from './email-html.js';
 import { securityHeadersForPath } from './security-policy.js';
+import { makePinnedLookup, validatedAddresses } from './net-guard.js';
+import { extractVerificationCode } from './verification-code.js';
 import https from 'node:https';
 import net from 'node:net';
-import { lookup } from 'node:dns/promises';
 import crypto from 'node:crypto';
 import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
 import fs from 'node:fs';
@@ -142,10 +143,15 @@ function recoverPendingRestore() {
   if (!committed) db.prepare('DELETE FROM app_preferences WHERE key = ?').run('__system_restore_tx');
 }
 recoverPendingRestore();
-db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
-db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').run(Date.now());
-db.prepare('DELETE FROM identity_oauth_states WHERE expires_at < ?').run(Date.now());
-db.prepare('DELETE FROM mobile_oauth_codes WHERE expires_at < ? OR consumed_at IS NOT NULL').run(Date.now());
+// 会话与流程状态的过期清理：启动时执行一次，之后随通知 sweep 周期性执行
+function pruneExpiredAuthRows() {
+  const now = Date.now();
+  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now);
+  db.prepare('DELETE FROM oauth_states WHERE expires_at < ?').run(now);
+  db.prepare('DELETE FROM identity_oauth_states WHERE expires_at < ?').run(now);
+  db.prepare('DELETE FROM mobile_oauth_codes WHERE expires_at < ? OR consumed_at IS NOT NULL').run(now);
+}
+pruneExpiredAuthRows();
 db.prepare('DELETE FROM notification_events WHERE created_at < ?').run(Date.now() - 7 * 24 * 60 * 60_000);
 
 const app = express();
@@ -715,7 +721,7 @@ function markMailboxSynced(accountId) {
   db.prepare('INSERT INTO app_preferences (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
     .run(`mailbox_last_sync:${accountId}`, String(Date.now()));
 }
-async function fetchMessages(account, folderKey, page, limit, query) {
+async function fetchMessages(account, folderKey, page, limit, query, { beforeUid = null } = {}) {
   return withImapClient(account, async (client) => {
     const mailboxes = await listMailboxes(account);
     const starredOnly = folderKey === 'Starred';
@@ -749,24 +755,41 @@ async function fetchMessages(account, folderKey, page, limit, query) {
       allStarred.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
       const start = (page - 1) * limit;
       markMailboxSynced(account.id);
-      return { accountId: account.id, path: '*', messages: allStarred.slice(start, start + limit), total: matched };
+      // 光标模式（网页版）：只取严格早于 beforeUid 的最新一页，避免翻页间隙新邮件导致重复
+      const windowedStarred = beforeUid ? allStarred.filter((item) => Number(item.uid) < beforeUid) : allStarred;
+      const starredPage = beforeUid ? windowedStarred.slice(0, limit) : windowedStarred.slice(start, start + limit);
+      return { accountId: account.id, path: '*', messages: starredPage, total: matched };
     }
     const knownKeys = ['INBOX', 'Sent', 'Drafts', 'Archive', 'Trash', 'Spam'];
     const pathName = knownKeys.includes(folderKey) ? findFolder(mailboxes, folderKey) : folderKey;
     if (!pathName) return { accountId: account.id, path: null, messages: [], total: 0 };
     const lock = await client.getMailboxLock(pathName, { readOnly: true });
     try {
-      const total = client.mailbox.exists || 0;
       let seqs;
-      if (query) {
+      let total;
+      if (beforeUid) {
+        // 光标模式：取 uid < beforeUid 中最新的一页；total 保持全量口径，保证 UI 计数稳定。
+        // search 按 seq 升序返回，末尾 limit 个即对应最大的 uid。
+        const queryTerms = query ? { or: [{ from: query }, { to: query }, { subject: query }, { text: query }] } : null;
+        const windowed = await client.search(queryTerms ? { ...queryTerms, uid: `1:${beforeUid - 1}` } : { uid: `1:${beforeUid - 1}` });
+        seqs = Array.isArray(windowed) ? windowed.slice(-limit) : [];
+        if (query) {
+          const all = await client.search(queryTerms);
+          total = Array.isArray(all) ? all.length : 0;
+        } else total = client.mailbox.exists || 0;
+      } else if (query) {
         const queryTerms = { or: [{ from: query }, { to: query }, { subject: query }, { text: query }] };
         seqs = await client.search(queryTerms);
         if (!Array.isArray(seqs)) seqs = [];
         seqs = seqs.slice().reverse();
-      } else seqs = total ? Array.from({ length: total }, (_, i) => total - i) : [];
-      const matched = seqs.length;
+        total = seqs.length;
+      } else {
+        total = client.mailbox.exists || 0;
+        seqs = total ? Array.from({ length: total }, (_, i) => total - i) : [];
+      }
+      const matched = total;
       const start = (page - 1) * limit;
-      const pageSeqs = seqs.slice(start, start + limit);
+      const pageSeqs = beforeUid ? seqs : seqs.slice(start, start + limit);
       if (!pageSeqs.length) return { accountId: account.id, path: pathName, messages: [], total: matched };
       const fetched = await client.fetchAll(pageSeqs.join(','), { uid: true, envelope: true, flags: true, internalDate: true, size: true });
       const messages = fetched.map((item) => ({
@@ -781,11 +804,6 @@ async function fetchMessages(account, folderKey, page, limit, query) {
   });
 }
 const safeInlineImageTypes = new Set(['image/png','image/jpeg','image/gif','image/webp','image/avif','image/bmp']);
-function normalizeContentId(value) {
-  let contentId = String(value || '').trim().replace(/^cid:/i, '').replace(/^<|>$/g, '').trim();
-  try { contentId = decodeURIComponent(contentId); } catch {}
-  return contentId.toLowerCase();
-}
 function inlineImageData(attachments = []) {
   const images = new Map();
   let totalBytes = 0;
@@ -1099,42 +1117,6 @@ async function sendFcmWake(token) {
   }
   throw new Error(`FCM message request failed (${response.status}${status ? ` ${status}` : ''}).`);
 }
-const ipv4BlockedRanges = [
-  ['0.0.0.0',8],['10.0.0.0',8],['100.64.0.0',10],['127.0.0.0',8],['169.254.0.0',16],['172.16.0.0',12],
-  ['192.0.0.0',24],['192.0.2.0',24],['192.88.99.0',24],['192.168.0.0',16],['198.18.0.0',15],['198.51.100.0',24],
-  ['203.0.113.0',24],['224.0.0.0',4],['240.0.0.0',4]
-].map(([address,bits]) => [address.split('.').reduce((n,p) => ((n << 8) | Number(p)) >>> 0, 0), bits]);
-function isPublicWebhookAddress(address) {
-  const ip = String(address).replace(/^\[|\]$/g, '').split('%')[0].toLowerCase();
-  const family = net.isIP(ip);
-  if (family === 4) {
-    const number = ip.split('.').reduce((n,p) => ((n << 8) | Number(p)) >>> 0, 0);
-    return !ipv4BlockedRanges.some(([network,bits]) => (((number & ((0xffffffff << (32 - bits)) >>> 0)) >>> 0) === ((network & ((0xffffffff << (32 - bits)) >>> 0)) >>> 0)));
-  }
-  if (family !== 6) return false;
-  if (ip.startsWith('::ffff:')) {
-    const suffix = ip.slice(7);
-    if (net.isIPv4(suffix)) return isPublicWebhookAddress(suffix);
-    const groups = suffix.split(':');
-    if (groups.length === 2 && groups.every((part) => /^[0-9a-f]{1,4}$/.test(part))) {
-      const n = ((parseInt(groups[0],16) << 16) | parseInt(groups[1],16)) >>> 0;
-      return isPublicWebhookAddress([n >>> 24,(n >>> 16) & 255,(n >>> 8) & 255,n & 255].join('.'));
-    }
-    return false;
-  }
-  const first = parseInt(ip.split(':')[0] || '0', 16);
-  return first >= 0x2000 && first <= 0x3fff && !ip.startsWith('2001:db8:') && !ip.startsWith('2002:');
-}
-function makePinnedWebhookLookup(addresses) {
-  return (hostname, options, callback) => {
-    if (typeof options === 'function') { callback = options; options = {}; }
-    const family = Number(options?.family || 0);
-    const matches = family ? addresses.filter((entry) => entry.family === family) : addresses;
-    if (!matches.length) { const error = new Error('Webhook address family unavailable'); error.code = 'ENOTFOUND'; callback(error); return; }
-    if (options?.all) callback(null, matches);
-    else callback(null, matches[0].address, matches[0].family);
-  };
-}
 async function validateWebhookUrl(value) {
   let url;
   try { url = new URL(String(value || '').trim()); } catch { throw new Error('Webhook 地址格式无效。'); }
@@ -1143,9 +1125,9 @@ async function validateWebhookUrl(value) {
   }
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) throw new Error('Webhook 主机必须是公网 HTTPS 地址。');
-  const family = net.isIP(host);
-  const addresses = family ? [{ address:host, family }] : await lookup(host, { all:true, verbatim:true });
-  if (!addresses.length || addresses.some((entry) => !isPublicWebhookAddress(entry.address))) throw new Error('Webhook 主机必须解析到公网 IP 地址。');
+  let addresses;
+  try { addresses = await validatedAddresses(host); }
+  catch { throw new Error('Webhook 主机必须解析到公网 IP 地址。'); }
   return { url, addresses };
 }
 function isWecomWebhook(url) {
@@ -1247,7 +1229,7 @@ function deliverWebhook(url, addresses, payload, secret) {
     if (secret) headers['x-youhui-signature'] = `sha256=${crypto.createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`;
     // The process-wide proxy is restricted to Google OAuth. Webhooks must use
     // their validated, pinned public addresses directly instead.
-    const requestOptions = { method:'POST', headers, lookup:makePinnedWebhookLookup(addresses), rejectUnauthorized:true, agent:false };
+    const requestOptions = { method:'POST', headers, lookup:makePinnedLookup(addresses), rejectUnauthorized:true, agent:false };
     if (!net.isIP(url.hostname.replace(/^\[|\]$/g, ''))) requestOptions.servername = url.hostname;
     const request = https.request(url, requestOptions, (response) => {
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -1275,13 +1257,6 @@ function deliverWebhook(url, addresses, payload, secret) {
     request.on('error', reject);
     request.end(body);
   });
-}
-const verificationCue = /验证码|校验码|动态(?:验证)?码|一次性(?:验证)?码|验证代码|登录(?:验证)?码|安全码|(?:verification|security|one[-\s]?time|login)\s+(?:code|password)|\bOTP\b/i;
-const verificationCodePattern = /(?:验证码|校验码|动态(?:验证)?码|一次性(?:验证)?码|验证代码|登录(?:验证)?码|安全码|(?:verification|security|one[-\s]?time|login)\s+(?:code|password)|\bOTP\b)[^\d]{0,24}(\d{4,8})(?!\d)/iu;
-function extractVerificationCode(text) {
-  const value = String(text || '').slice(0, 14000);
-  if (!verificationCue.test(value)) return null;
-  return value.match(verificationCodePattern)?.[1] || null;
 }
 function eventPayload(account, item, uid, code) {
   const from = messageAddress(item.envelope, 'from')[0] || { name:'', address:'' };
@@ -1356,6 +1331,37 @@ async function scanAccountForNotifications(account, config) {
   });
 }
 const notificationIdleMonitors = new Map();
+// IDLE 收到新邮件时的定向扫描：3 秒去抖合并连发事件，只扫来源账户，不做全量 sweep
+const targetedScanTimers = new Map();
+let targetedScanRunning = false;
+function scheduleTargetedScan(accountId) {
+  if (targetedScanTimers.has(accountId)) return;
+  const timer = setTimeout(() => {
+    targetedScanTimers.delete(accountId);
+    void runTargetedScan(accountId);
+  }, 3000);
+  targetedScanTimers.set(accountId, timer);
+  timer.unref?.();
+}
+function cancelTargetedScan(accountId) {
+  clearTimeout(targetedScanTimers.get(accountId));
+  targetedScanTimers.delete(accountId);
+}
+async function runTargetedScan(accountId) {
+  if (targetedScanRunning) { scheduleNotificationSweep(0); return; }
+  targetedScanRunning = true;
+  try {
+    const config = getNotificationConfig();
+    if (config.enabled) {
+      const row = db.prepare('SELECT * FROM accounts WHERE id = ?').get(accountId);
+      if (row) await scanAccountForNotifications(mapAccount(row), config);
+      await deliverPendingWebhooks(config);
+      await deliverPendingWxPusher(config);
+      await deliverPendingFcm(config);
+    }
+  } catch (error) { console.warn(`Targeted new-mail scan failed for account ${accountId}:`, safeError(error)); }
+  finally { targetedScanRunning = false; }
+}
 function mailboxStatus(accountId) {
   const lastSync = db.prepare('SELECT value FROM app_preferences WHERE key = ?').get(`mailbox_last_sync:${accountId}`)?.value;
   const monitor = notificationIdleMonitors.get(accountId);
@@ -1416,7 +1422,7 @@ async function connectNotificationIdle(monitor) {
       client = makeImap(fresh, { maxIdleTime: notificationIdleRenewMs });
       monitor.client = client;
       client.on('exists', (event) => {
-        if (monitor.client === client && String(event?.path || '').toUpperCase() === 'INBOX') scheduleNotificationSweep(0);
+        if (monitor.client === client && String(event?.path || '').toUpperCase() === 'INBOX') scheduleTargetedScan(monitor.accountId);
       });
       client.on('error', (error) => scheduleNotificationIdleReconnect(monitor, client, generation, error));
       client.on('close', () => scheduleNotificationIdleReconnect(monitor, client, generation));
@@ -1523,6 +1529,18 @@ async function deliverPendingFcm(config) {
     console.warn(`FCM delivery ${row.id} ${abandoned ? 'abandoned' : 'will retry'} after transient failure.`);
   }
 }
+function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  return Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      try { results[index] = await worker(items[index]); }
+      catch (error) { results[index] = error; }
+    }
+  })).then(() => results);
+}
 let notificationSweepTimer = null;
 let notificationSweepRunning = false;
 let notificationSweepRequested = false;
@@ -1536,13 +1554,15 @@ function scheduleNotificationSweep(delay = 120_000) {
     try {
       const config = getNotificationConfig();
       reconcileNotificationIdles(config);
+      pruneExpiredAuthRows();
       if (config.enabled) {
         db.prepare('DELETE FROM notification_events WHERE created_at < ?').run(Date.now() - 7 * 24 * 60 * 60_000);
         const accounts = db.prepare('SELECT * FROM accounts ORDER BY created_at').all().map(mapAccount);
-        for (const account of accounts) {
+        // 多账户受控并行扫描（并发度 3）；单账户内部保持串行，避免连接风暴
+        await mapWithConcurrency(accounts, 3, async (account) => {
           try { await scanAccountForNotifications(account, config); }
-          catch (error) { console.warn(`New-mail scan skipped for account ${account.id}: ${safeError(error)}`); }
-        }
+          catch (error) { console.warn(`New-mail notification scan skipped for account ${account.id}: ${safeError(error)}`); }
+        });
         await deliverPendingWebhooks(config);
         await deliverPendingWxPusher(config);
         await deliverPendingFcm(config);
@@ -1951,6 +1971,7 @@ app.delete('/api/accounts/:id', auth, (req, res) => {
   const result = db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
   if (!result.changes) return res.status(404).json({ error: '找不到此邮箱账户。' });
   stopNotificationIdle(req.params.id);
+  cancelTargetedScan(req.params.id);
   evictPooledImap(req.params.id);
   mailboxListCache.delete(req.params.id);
   db.prepare('DELETE FROM app_preferences WHERE key = ? AND value = ?').run('default_account_id', req.params.id);
@@ -1977,11 +1998,13 @@ app.get('/api/mail', auth, async (req, res) => {
   const query = String(req.query.q || '').trim().slice(0, 200);
   const page = Math.max(1, Math.min(1000, Number(req.query.page) || 1));
   const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 30));
+  const beforeUidRaw = Number.parseInt(String(req.query.beforeUid || ''), 10);
+  const beforeUid = Number.isSafeInteger(beforeUidRaw) && beforeUidRaw > 0 ? beforeUidRaw : null;
   try {
     let accounts = db.prepare('SELECT * FROM accounts ORDER BY created_at').all().map(mapAccount);
     if (accountFilter !== 'all') accounts = accounts.filter((a) => a.id === accountFilter);
     const results = await Promise.all(accounts.map(async (account) => {
-      try { return await fetchMessages(account, folder, page, limit, query); }
+      try { return await fetchMessages(account, folder, page, limit, query, { beforeUid }); }
       catch (error) { return { accountId: account.id, path: null, messages: [], total: 0, error: safeError(error) }; }
     }));
     const messages = results.flatMap((result) => result.messages).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));

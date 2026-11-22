@@ -7,6 +7,8 @@
 !mcp-service.js
 !email-html.js
 !security-policy.js
+!net-guard.js
+!verification-code.js
 !mail-frame.html
 !public/
 !public/**

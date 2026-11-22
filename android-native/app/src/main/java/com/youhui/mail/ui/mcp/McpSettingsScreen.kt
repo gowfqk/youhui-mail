@@ -298,6 +298,44 @@ fun McpSettingsScreen(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        // MCP 客户端配置 JSON（endpoint + token 一键复制）
+                        state.config?.endpoint?.let { endpoint ->
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                if (I18n.lang == I18n.EN) "MCP client config (paste into mcpServers settings)" else "MCP 客户端配置（粘贴到 mcpServers 设置）",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            val mcpJson = kotlinx.serialization.json.Json.encodeToString(
+                                kotlinx.serialization.json.JsonObject.serializer(),
+                                kotlinx.serialization.json.buildJsonObject {
+                                    put("mcpServers", kotlinx.serialization.json.buildJsonObject {
+                                        put("youhui-mail", kotlinx.serialization.json.buildJsonObject {
+                                            put("url", kotlinx.serialization.json.JsonPrimitive(endpoint))
+                                            put("headers", kotlinx.serialization.json.buildJsonObject {
+                                                put("Authorization", kotlinx.serialization.json.JsonPrimitive("Bearer $token"))
+                                            })
+                                        })
+                                    })
+                                }
+                            )
+                            OutlinedTextField(
+                                value = mcpJson,
+                                onValueChange = { },
+                                readOnly = true,
+                                singleLine = false,
+                                maxLines = 6,
+                                textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Button(onClick = { clipboard.setText(AnnotatedString(mcpJson)) }) {
+                                Icon(Icons.Filled.ContentCopy, contentDescription = null, Modifier.size(16.dp))
+                                Spacer(Modifier.size(6.dp))
+                                Text(if (I18n.lang == I18n.EN) "Copy MCP config" else t("复制 MCP 配置"))
+                            }
+                        }
                     }
                 }
             }

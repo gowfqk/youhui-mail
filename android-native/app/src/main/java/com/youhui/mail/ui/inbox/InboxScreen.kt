@@ -170,15 +170,25 @@ fun InboxScreen(
                                 state = dismissState,
                                 enableDismissFromStartToEnd = state.folder == "INBOX",
                                 backgroundContent = {
-                                    val (icon, color, alignment) = when (dismissState.dismissDirection) {
-                                        SwipeToDismissBoxValue.StartToEnd -> Triple(Icons.Filled.Archive, MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer, Alignment.CenterStart)
-                                        else -> Triple(Icons.Filled.Delete, MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer, Alignment.CenterEnd)
-                                    }
-                                    Box(
-                                        Modifier.fillMaxSize().background(color.first).padding(horizontal = 24.dp),
-                                        contentAlignment = alignment
-                                    ) {
-                                        Icon(icon, contentDescription = null, tint = color.second)
+                                    // 仅在滑动中显示背景图标；Settled 时空白（否则 Delete 图标透出、看起来像可点击但没反应）
+                                    when (dismissState.dismissDirection) {
+                                        SwipeToDismissBoxValue.StartToEnd -> {
+                                            Box(
+                                                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.tertiaryContainer).padding(horizontal = 24.dp),
+                                                contentAlignment = Alignment.CenterStart
+                                            ) {
+                                                Icon(Icons.Filled.Archive, contentDescription = null, tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                                            }
+                                        }
+                                        SwipeToDismissBoxValue.EndToStart -> {
+                                            Box(
+                                                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.errorContainer).padding(horizontal = 24.dp),
+                                                contentAlignment = Alignment.CenterEnd
+                                            ) {
+                                                Icon(Icons.Filled.Delete, contentDescription = null, tint = MaterialTheme.colorScheme.onErrorContainer)
+                                            }
+                                        }
+                                        else -> {}
                                     }
                                 }
                             ) {

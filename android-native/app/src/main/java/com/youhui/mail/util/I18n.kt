@@ -159,7 +159,7 @@ object I18n {
         "打开 Agent / MCP 设置" to "Open Agent / MCP settings",
         "打开翻译设置" to "Open translation settings",
         "拒绝" to "Deny",
-        "摘要：": "Digest: ",
+        "摘要：" to "Digest: ",
         "撤销" to "Revoke",
         "收起" to "Collapse",
         "新邮件检查" to "New-mail checks",

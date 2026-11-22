@@ -389,11 +389,20 @@ fun SettingsScreen(
                         modifier = Modifier.weight(1f)
                     )
                 }
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(t("语言"), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    TextButton(onClick = {
+                        I18n.setLang(context, if (I18n.lang == I18n.EN) I18n.ZH else I18n.EN)
+                        (context as? android.app.Activity)?.recreate()
+                    }) {
+                        Text(if (I18n.lang == I18n.EN) "中文" else "English")
+                    }
+                }
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("退出登录", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                    Text(t("退出登录"), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                     OutlinedButton(onClick = { confirmLogout = true }) {
                         Icon(Icons.Filled.Logout, contentDescription = null, Modifier.size(16.dp))
                         Spacer(Modifier.size(6.dp))

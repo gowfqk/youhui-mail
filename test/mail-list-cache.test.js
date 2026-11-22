@@ -114,3 +114,11 @@ test('app shows cached rows while refreshing and clears cache on logout or accou
   assert.match(app, /mailListCache\.clearAccount\(account\.id\)/);
   assert.ok(index.indexOf('mail-list-cache-') < index.indexOf('app-'), 'cache helper loads before the app script');
 });
+
+test('pagination cursors carry forward per-account entries so exhausted accounts never repeat', () => {
+  const app = read('../public/app.js');
+  // 下一页游标必须以旧游标为底合并：本页 0 封贡献的账户保留游标，
+  // 否则服务端会对它重新取第一页，导致已看过的邮件在后续页重复出现
+  assert.match(app, /const next=\{\.\.\.\(state\.cursor\|\|\{\}\)\}/);
+  assert.match(app, /known===undefined\|\|uid<known/);
+});

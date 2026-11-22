@@ -83,6 +83,8 @@ object OAuthLoopback {
         acceptThread.start()
 
         try {
+            // 前台服务保持进程存活：浏览器登录期间进程被冻结/杀死会让回环监听失效
+            OAuthLoopbackService.start(context)
             val start = locator.api().oauthStart(
                 provider = provider,
                 redirectUri = redirectUri,
@@ -115,6 +117,7 @@ object OAuthLoopback {
             return token.session?.kind ?: "mobile"
         } finally {
             server.close()
+            OAuthLoopbackService.stop(context)
         }
     }
 

@@ -244,7 +244,6 @@ object I18n {
         "创建 " to "Create ",
         " 令牌" to " token",
         " 令牌范围" to " token scope",
-        "有 \${": "There are ",
         "下载中…" to "Downloading…",
         "无法打开附件：" to "Cannot open attachment: ",
         "打开附件" to "Open attachment",

@@ -1,0 +1,50 @@
+# 邮汇 docker compose 示例
+# 使用：复制 .env.example 为 .env 并填写，然后 docker compose up -d
+# 镜像：ghcr.io/gowfqk/youhui-mail:latest
+
+services:
+  youhui-mail:
+    image: ghcr.io/gowfqk/youhui-mail:latest
+    container_name: youhui-mail
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      # 数据库、加密密钥、备份等持久化数据
+      - youhui-data:/data
+      # 如果使用 FCM 服务账号文件挂载（可选，也可直接用 env 传 JSON）
+      # - ./firebase-service-account.json:/run/secrets/fcm-sa.json:ro
+    env_file:
+      - .env
+    environment:
+      # 以下变量会覆盖 .env 中的同名变量（按需取消注释）
+      # PORT: 3000
+      # HOST: 0.0.0.0
+      # DATA_DIR: /data
+      # APP_BASE_URL: https://mail.example.com
+      #
+      # ---- 邮箱 OAuth（也可启动后在网页设置中配置）----
+      # GOOGLE_CLIENT_ID: your-google-client-id
+      # GOOGLE_CLIENT_SECRET: your-google-client-secret
+      # MICROSOFT_CLIENT_ID: your-microsoft-client-id
+      # MICROSOFT_CLIENT_SECRET: your-microsoft-client-secret
+      #
+      # ---- FCM 推送（服务端；Android 端还需 google-services.json）----
+      # 方式一：直接传 JSON 内容
+      # FCM_SERVICE_ACCOUNT_JSON: |
+      #   {
+      #     "type": "service_account",
+      #     "project_id": "your-project",
+      #     ...
+      #   }
+      # 方式二：挂载文件路径
+      # GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/fcm-sa.json
+    healthcheck:
+      test: ["node", "-e", "fetch(`http://127.0.0.1:${process.env.PORT || 3000}/api/status`).then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  youhui-data:

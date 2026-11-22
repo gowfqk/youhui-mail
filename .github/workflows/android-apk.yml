@@ -6,16 +6,23 @@ on:
     tags: [ 'v*-native' ]
   workflow_dispatch:
 
+# tag 构建会创建 GitHub Release（上传签名后的 APK）
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
-    name: Build debug APK (android-native)
+    name: Build APK (android-native)
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: android-native
+    env:
+      ANDROID_FIREBASE_CONFIG: ${{ secrets.ANDROID_FIREBASE_CONFIG }}
+      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_ALIAS_PASSWORD: ${{ secrets.ANDROID_KEY_ALIAS_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -45,8 +52,21 @@ jobs:
         with:
           gradle-version: '9.0.0'
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --console=plain
+      - name: Restore Firebase configuration
+        if: env.ANDROID_FIREBASE_CONFIG != ''
+        run: printf '%s' "$ANDROID_FIREBASE_CONFIG" > app/google-services.json
+
+      - name: Restore signing keystore
+        if: env.ANDROID_KEYSTORE_B64 != ''
+        run: printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/youhui-release.keystore"
+
+      - name: Build APK
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/youhui-release.keystore
+        run: |
+          # tag 构建 = 签名 release（发布用）；main/手动构建 = 固定签名 debug（测试用）
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then TASK="assembleRelease"; else TASK="assembleDebug"; fi
+          gradle $TASK --no-daemon --console=plain
 
       - name: Detect version
         id: ver
@@ -55,10 +75,18 @@ jobs:
           VERSION=$(grep -E "versionName" app/build.gradle | sed -E "s/.*versionName '([^']+)'.*/\1/")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Upload APK artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: youhui-mail-native-debug-${{ steps.ver.outputs.version }}-${{ github.run_number }}
-          path: android-native/app/build/outputs/apk/debug/*.apk
+          name: youhui-mail-${{ steps.ver.outputs.version }}-${{ github.run_number }}
+          path: android-native/app/build/outputs/apk/*/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ github.ref_name }}" app/build/outputs/apk/release/*.apk \
+            --title "邮汇 Android ${{ github.ref_name }}" --generate-notes

@@ -22,8 +22,29 @@ android {
         applicationId 'com.youhui.mail'
         minSdk 27
         targetSdk 35
-        versionCode 14
-        versionName '2.4.2-native'
+        versionCode 15
+        versionName '2.4.3-native'
+    }
+
+    // 签名：CI/本地通过环境变量注入固定密钥库（PKCS12），跨构建签名一致、可覆盖安装；
+    // 未注入时 release 为未签名、debug 回落默认调试密钥。密钥与口令不入库（CI 从 Secret 恢复）。
+    def signing = [
+        file         : System.getenv('ANDROID_KEYSTORE_FILE'),
+        storePassword: System.getenv('ANDROID_KEYSTORE_PASSWORD'),
+        alias        : System.getenv('ANDROID_KEY_ALIAS'),
+        keyPassword  : System.getenv('ANDROID_KEY_ALIAS_PASSWORD')
+    ]
+
+    signingConfigs {
+        stable {
+            if (signing.file) {
+                storeType 'PKCS12'
+                storeFile file(signing.file)
+                storePassword signing.storePassword
+                keyAlias signing.alias
+                keyPassword signing.keyPassword
+            }
+        }
     }
 
     buildTypes {
@@ -31,7 +52,10 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-            // 发布前配置签名：signingConfig signingConfigs.release（签名文件勿入库）
+            if (signing.file) signingConfig signingConfigs.stable
+        }
+        debug {
+            if (signing.file) signingConfig signingConfigs.stable
         }
     }
     compileOptions {

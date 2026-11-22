@@ -8,9 +8,12 @@ import { sanitizeEmailHtml, normalizeContentId } from './email-html.js';
 import { securityHeadersForPath } from './security-policy.js';
 import { makePinnedLookup, validatedAddresses } from './net-guard.js';
 import { extractVerificationCode } from './verification-code.js';
+import { hashPassword, verifyPassword, passwordNeedsRehash } from './password-hash.js';
+import { BACKUP_MAGIC, BACKUP_ENCRYPTED_MAGIC, BACKUP_MAX_BYTES, parseBackupFile, decryptWithKey, fileSha256Hex, encryptBackupFileStreaming } from './backup-file.js';
 import https from 'node:https';
 import net from 'node:net';
 import crypto from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { createRemoteJWKSet, importPKCS8, jwtVerify, SignJWT } from 'jose';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -28,9 +31,6 @@ if (!fs.existsSync(KEY_PATH)) fs.writeFileSync(KEY_PATH, crypto.randomBytes(32),
 fs.chmodSync(KEY_PATH, 0o600);
 let ENCRYPTION_KEY = fs.readFileSync(KEY_PATH);
 if (ENCRYPTION_KEY.length !== 32) throw new Error('加密密钥格式错误：data/encryption.key 必须是 32 字节。');
-const BACKUP_MAGIC = Buffer.from('YOUHUI-MAIL-BACKUP\n', 'ascii');
-const BACKUP_ENCRYPTED_MAGIC = Buffer.from('YOUHUI-MAIL-ENCRYPTED-BACKUP\n', 'ascii');
-const BACKUP_MAX_BYTES = 250 * 1024 * 1024;
 const RESTORE_PENDING_PATH = path.join(DATA_DIR, '.restore-pending.json');
 function writePrivateFile(filePath, contents) {
   const temporaryPath = `${filePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
@@ -42,13 +42,6 @@ function writePrivateFile(filePath, contents) {
   } finally {
     try { fs.rmSync(temporaryPath, { force: true }); } catch {}
   }
-}
-function decryptWithKey(value, key) {
-  const all = Buffer.from(String(value || ''), 'base64');
-  if (all.length < 29) throw new Error('备份中的加密数据格式无效。');
-  const decipher = crypto.createDecipheriv('aes-256-gcm', key, all.subarray(0, 12));
-  decipher.setAuthTag(all.subarray(12, 28));
-  return JSON.parse(Buffer.concat([decipher.update(all.subarray(28)), decipher.final()]).toString('utf8'));
 }
 const db = new Database(path.join(DATA_DIR, 'mail.sqlite'));
 db.pragma('journal_mode = WAL');
@@ -91,6 +84,10 @@ db.exec(`
     code_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, device_state_hash TEXT NOT NULL,
     code_challenge TEXT NOT NULL, expires_at INTEGER NOT NULL, consumed_at INTEGER
   );
+  CREATE INDEX IF NOT EXISTS idx_notification_events_webhook_due ON notification_events(webhook_next_attempt_at) WHERE webhook_pending = 1 AND webhook_abandoned = 0;
+  CREATE INDEX IF NOT EXISTS idx_notification_events_wxpusher_due ON notification_events(wxpusher_next_attempt_at) WHERE wxpusher_pending = 1 AND wxpusher_abandoned = 0;
+  CREATE INDEX IF NOT EXISTS idx_notification_events_fcm_due ON notification_events(fcm_next_attempt_at) WHERE fcm_pending = 1 AND fcm_abandoned = 0;
+  CREATE INDEX IF NOT EXISTS idx_notification_events_created_at ON notification_events(created_at);
 `);
 // WxPusher has its own retry lifecycle; do not repurpose legacy webhook fields.
 for (const [column, definition] of Object.entries({
@@ -273,15 +270,10 @@ app.use('/api', (req, res, next) => {
   next();
 });
 
-const passwordHash = (password, salt = crypto.randomBytes(16)) => {
-  const result = crypto.scryptSync(password, salt, 64);
-  return `${salt.toString('hex')}:${result.toString('hex')}`;
-};
-function passwordMatches(password, encoded) {
-  const [saltHex, digestHex] = encoded.split(':');
-  const actual = crypto.scryptSync(password, Buffer.from(saltHex, 'hex'), 64);
-  const expected = Buffer.from(digestHex, 'hex');
-  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+// 旧格式口令（N=16384）在登录成功后透明升级到当前成本参数
+function rehashPasswordIfLegacy(encoded, password) {
+  if (!passwordNeedsRehash(encoded)) return;
+  try { db.prepare('UPDATE app_config SET password_hash = ? WHERE id = 1').run(hashPassword(password)); } catch {}
 }
 const loginAttempts = new Map();
 function attemptAllowed(req) {
@@ -937,7 +929,7 @@ app.post('/api/setup', (req, res) => {
   if (db.prepare('SELECT id FROM app_config WHERE id = 1').get()) return res.status(409).json({ error: '首次设置已完成，请解锁。' });
   const password = String(req.body?.password || '');
   if (password.length < 12) return res.status(400).json({ error: '为保护邮箱，请设置至少 12 位的工作台密码。' });
-  db.prepare('INSERT INTO app_config (id,password_hash) VALUES (1,?)').run(passwordHash(password));
+  db.prepare('INSERT INTO app_config (id,password_hash) VALUES (1,?)').run(hashPassword(password));
   const token = crypto.randomBytes(32).toString('base64url');
   const expires = Date.now() + 30 * 24 * 60 * 60_000;
   db.prepare('INSERT INTO sessions (token_hash,expires_at) VALUES (?,?)').run(hash(token), expires);
@@ -948,8 +940,10 @@ app.post('/api/login', (req, res) => {
   if (!attemptAllowed(req)) return res.status(429).json({ error: '尝试次数过多，请 15 分钟后再试。' });
   const row = db.prepare('SELECT password_hash FROM app_config WHERE id = 1').get();
   if (!row) return res.status(409).json({ error: '请先完成首次设置。' });
-  if (!passwordMatches(String(req.body?.password || ''), row.password_hash)) return res.status(401).json({ error: '密码不正确。' });
+  const password = String(req.body?.password || '');
+  if (!verifyPassword(password, row.password_hash)) return res.status(401).json({ error: '密码不正确。' });
   loginAttempts.delete(req.ip || 'unknown');
+  rehashPasswordIfLegacy(row.password_hash, password);
   const token = crypto.randomBytes(32).toString('base64url');
   db.prepare('INSERT INTO sessions (token_hash,expires_at) VALUES (?,?)').run(hash(token), Date.now() + 30 * 24 * 60 * 60_000);
   setSessionCookie(res, req, token);
@@ -991,10 +985,12 @@ app.post('/api/mobile/login', (req, res) => {
   if (!attemptAllowed(req)) return res.status(429).json({ error: '尝试次数过多，请 15 分钟后再试。' });
   const row = db.prepare('SELECT password_hash FROM app_config WHERE id = 1').get();
   if (!row) return res.status(409).json({ error: '请先完成首次设置。' });
-  if (!passwordMatches(String(req.body?.password || ''), row.password_hash)) return res.status(401).json({ error: '密码不正确。' });
+  const password = String(req.body?.password || '');
+  if (!verifyPassword(password, row.password_hash)) return res.status(401).json({ error: '密码不正确。' });
   const deviceId = String(req.body?.deviceId || '').trim();
   if (!mobileDeviceIdPattern.test(deviceId)) return res.status(400).json({ error: '设备标识无效。' });
   loginAttempts.delete(req.ip || 'unknown');
+  rehashPasswordIfLegacy(row.password_hash, password);
   res.json(insertMobileSession(deviceId, cleanDeviceLabel(req.body?.deviceLabel)));
 });
 app.get('/api/mobile/sessions', auth, (req, res) => {
@@ -1758,73 +1754,6 @@ function verifyBackupDatabase(database, key) {
   for (const row of database.prepare('SELECT payload FROM ai_digests').all()) decryptWithKey(row.payload, key);
   return sourceTables;
 }
-function parsePlainBackupFile(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < BACKUP_MAGIC.length + 2 || buffer.length > BACKUP_MAX_BYTES) {
-    throw new Error('备份文件为空、过大或格式无效（最大 250 MB）。');
-  }
-  if (!buffer.subarray(0, BACKUP_MAGIC.length).equals(BACKUP_MAGIC)) throw new Error('这不是有效的邮汇备份文件。');
-  const headerEnd = buffer.indexOf(0x0a, BACKUP_MAGIC.length);
-  if (headerEnd < 0 || headerEnd - BACKUP_MAGIC.length > 4096) throw new Error('备份文件头无效。');
-  let header;
-  try { header = JSON.parse(buffer.subarray(BACKUP_MAGIC.length, headerEnd).toString('utf8')); }
-  catch { throw new Error('备份文件头无法读取。'); }
-  const key = Buffer.from(String(header.encryptionKey || ''), 'base64');
-  const databaseBytes = buffer.subarray(headerEnd + 1);
-  if (header.version !== 1 || key.length !== 32 || key.toString('base64') !== header.encryptionKey ||
-      !Number.isSafeInteger(header.databaseBytes) || header.databaseBytes !== databaseBytes.length ||
-      databaseBytes.length < 100 || databaseBytes.length > BACKUP_MAX_BYTES ||
-      !/^[a-f0-9]{64}$/.test(String(header.databaseSha256 || '')) ||
-      crypto.createHash('sha256').update(databaseBytes).digest('hex') !== header.databaseSha256) {
-    throw new Error('备份文件不完整、已损坏或版本不受支持。');
-  }
-  return { key, databaseBytes };
-}
-function encryptBackupFile(payload, passphrase) {
-  const password = String(passphrase || '');
-  if (password.length < 12 || password.length > 1024) throw new Error('加密备份密码须为 12 到 1024 个字符。');
-  const salt = crypto.randomBytes(16);
-  const iv = crypto.randomBytes(12);
-  const key = crypto.scryptSync(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
-  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
-  const ciphertext = Buffer.concat([cipher.update(payload), cipher.final()]);
-  const header = Buffer.from(JSON.stringify({
-    version: 1, kdf: 'scrypt', n: 32768, r: 8, p: 1,
-    salt: salt.toString('base64'), iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'),
-    ciphertextBytes: ciphertext.length, ciphertextSha256: crypto.createHash('sha256').update(ciphertext).digest('hex')
-  }), 'utf8');
-  return Buffer.concat([BACKUP_ENCRYPTED_MAGIC, header, Buffer.from('\n'), ciphertext]);
-}
-function parseBackupFile(buffer, passphrase = '') {
-  if (Buffer.isBuffer(buffer) && buffer.subarray(0, BACKUP_ENCRYPTED_MAGIC.length).equals(BACKUP_ENCRYPTED_MAGIC)) {
-    if (buffer.length > BACKUP_MAX_BYTES) throw new Error('加密备份文件超过 250 MB 上限。');
-    const headerEnd = buffer.indexOf(0x0a, BACKUP_ENCRYPTED_MAGIC.length);
-    if (headerEnd < 0 || headerEnd - BACKUP_ENCRYPTED_MAGIC.length > 4096) throw new Error('加密备份文件头无效。');
-    let header;
-    try { header = JSON.parse(buffer.subarray(BACKUP_ENCRYPTED_MAGIC.length, headerEnd).toString('utf8')); }
-    catch { throw new Error('加密备份文件头无法读取。'); }
-    const ciphertext = buffer.subarray(headerEnd + 1);
-    const salt = Buffer.from(String(header.salt || ''), 'base64');
-    const iv = Buffer.from(String(header.iv || ''), 'base64');
-    const tag = Buffer.from(String(header.tag || ''), 'base64');
-    if (header.version !== 1 || header.kdf !== 'scrypt' || header.n !== 32768 || header.r !== 8 || header.p !== 1 ||
-        salt.length !== 16 || iv.length !== 12 || tag.length !== 16 ||
-        !Number.isSafeInteger(header.ciphertextBytes) || header.ciphertextBytes !== ciphertext.length || ciphertext.length < 100 ||
-        !/^[a-f0-9]{64}$/.test(String(header.ciphertextSha256 || '')) ||
-        crypto.createHash('sha256').update(ciphertext).digest('hex') !== header.ciphertextSha256) {
-      throw new Error('加密备份不完整、已损坏或版本不受支持。');
-    }
-    const password = String(passphrase || '');
-    if (password.length < 12 || password.length > 1024) throw new Error('请输入创建此加密备份时设置的密码（至少 12 个字符）。');
-    try {
-      const key = crypto.scryptSync(password, salt, 32, { N: 32768, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
-      const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-      decipher.setAuthTag(tag);
-      const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-      return parsePlainBackupFile(plaintext);
-    } catch { throw new Error('加密备份密码不正确，或文件已损坏。'); }
-  }
-  return parsePlainBackupFile(buffer);
-}
 async function exportBackup(req, res, encrypted, passphrase) {
   const temporaryDirectory = fs.mkdtempSync(path.join(DATA_DIR, '.backup-export-'));
   const snapshotPath = path.join(temporaryDirectory, 'mail.sqlite');
@@ -1838,20 +1767,44 @@ async function exportBackup(req, res, encrypted, passphrase) {
         snapshot.prepare('DELETE FROM app_preferences WHERE key = ?').run('__system_restore_tx');
       })();
     } finally { snapshot.close(); }
-    const databaseBytes = fs.readFileSync(snapshotPath);
-    if (databaseBytes.length > BACKUP_MAX_BYTES - 8192) return res.status(413).json({ error: '数据库超过 250 MB，暂时无法通过浏览器导出。' });
-    const header = Buffer.from(JSON.stringify({ version: 1, createdAt: new Date().toISOString(), encryptionKey: ENCRYPTION_KEY.toString('base64'), databaseBytes: databaseBytes.length, databaseSha256: crypto.createHash('sha256').update(databaseBytes).digest('hex') }), 'utf8');
-    const plainPayload = Buffer.concat([BACKUP_MAGIC, header, Buffer.from('\n'), databaseBytes]);
-    const payload = encrypted ? encryptBackupFile(plainPayload, passphrase) : plainPayload;
-    if (payload.length > BACKUP_MAX_BYTES) return res.status(413).json({ error: '备份超过 250 MB 上限，暂时无法通过浏览器导出。' });
+    const snapshotSize = fs.statSync(snapshotPath).size;
+    if (snapshotSize > BACKUP_MAX_BYTES - 8192) return res.status(413).json({ error: '数据库超过 250 MB，暂时无法通过浏览器导出。' });
     const filename = `youhui-backup-${new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19)}${encrypted ? '-encrypted' : ''}.yhbackup`;
+    // 明文直接流式发送；加密路径先流式加密到临时文件，避免把整库读进内存
+    let bodyPath = snapshotPath;
+    let bodySize = snapshotSize;
+    let header;
+    if (encrypted) {
+      // 加密导出必须保持旧格式：密文内容是完整明文备份（magic + 头 + 数据库字节），
+      // 恢复端解密后会先按明文备份结构校验。先流式组装明文文件，再整体流式加密。
+      const plainHeader = Buffer.from(JSON.stringify({ version: 1, createdAt: new Date().toISOString(), encryptionKey: ENCRYPTION_KEY.toString('base64'), databaseBytes: snapshotSize, databaseSha256: await fileSha256Hex(snapshotPath) }), 'utf8');
+      const plainPath = path.join(temporaryDirectory, 'backup.plain');
+      const plainPrefix = Buffer.concat([BACKUP_MAGIC, plainHeader, Buffer.from('\n')]);
+      await pipeline(
+        fs.createReadStream(snapshotPath),
+        async function* (source) {
+          yield plainPrefix;
+          for await (const chunk of source) yield chunk;
+        },
+        fs.createWriteStream(plainPath, { mode: 0o600 })
+      );
+      fs.chmodSync(plainPath, 0o600);
+      const result = await encryptBackupFileStreaming(plainPath, path.join(temporaryDirectory, 'backup.enc'), passphrase);
+      header = result.header;
+      bodyPath = result.ciphertextPath;
+      bodySize = Number(JSON.parse(header.toString('utf8')).ciphertextBytes);
+    } else {
+      header = Buffer.from(JSON.stringify({ version: 1, createdAt: new Date().toISOString(), encryptionKey: ENCRYPTION_KEY.toString('base64'), databaseBytes: snapshotSize, databaseSha256: await fileSha256Hex(snapshotPath) }), 'utf8');
+    }
+    const prefix = Buffer.concat([encrypted ? BACKUP_ENCRYPTED_MAGIC : BACKUP_MAGIC, header, Buffer.from('\n')]);
     res.setHeader('Content-Type', 'application/vnd.youhui-mail.backup');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.setHeader('Content-Length', String(payload.length));
+    res.setHeader('Content-Length', String(prefix.length + bodySize));
     res.setHeader('X-Backup-Encrypted', encrypted ? 'true' : 'false');
     res.setHeader('Cache-Control', 'no-store, private, max-age=0');
     res.setHeader('Pragma', 'no-cache');
-    res.send(payload);
+    res.write(prefix);
+    await pipeline(fs.createReadStream(bodyPath), res);
   } catch (error) {
     if (!res.headersSent) res.status(500).json({ error: '无法生成备份，请稍后重试。' });
   } finally {
@@ -2050,27 +2003,16 @@ app.post('/api/message/:accountId/:uid/action', auth, async (req, res) => {
     res.json(await mutateMessage(account, String(req.body?.folder || 'INBOX').slice(0, 200), req.params.uid, String(req.body?.action || '')));
   } catch (error) { res.status(400).json({ error: safeError(error) }); }
 });
-function encodeMimeHeader(value) { return `=?UTF-8?B?${Buffer.from(String(value || '').replace(/[\r\n]+/g, ' '), 'utf8').toString('base64')}?=`; }
-function base64Lines(value) { return Buffer.from(String(value || ''), 'utf8').toString('base64').match(/.{1,76}/g)?.join('\r\n') || ''; }
-function rawSentMessage({ email, label, to, cc, subject, text, messageId, inReplyTo, references, attachments = [] }) {
-  const safeHeader = (v) => String(v || '').replace(/[\r\n]+/g, ' ').slice(0, 5000);
-  const headers = [
-    `From: ${encodeMimeHeader(label)} <${safeHeader(email)}>`, `To: ${safeHeader(to)}`,
-    ...(cc ? [`Cc: ${safeHeader(cc)}`] : []), `Date: ${new Date().toUTCString()}`,
-    `Message-ID: ${safeHeader(messageId)}`, `Subject: ${encodeMimeHeader(subject)}`,
-    ...(inReplyTo ? [`In-Reply-To: ${safeHeader(inReplyTo)}`] : []),
-    ...(references ? [`References: ${safeHeader(references)}`] : []), 'MIME-Version: 1.0'
-  ];
-  if (!attachments.length) return `${[...headers,'Content-Type: text/plain; charset=UTF-8','Content-Transfer-Encoding: base64'].join('\r\n')}\r\n\r\n${base64Lines(text)}\r\n`;
-  const boundary = `=_youhui_${crypto.randomBytes(16).toString('hex')}`;
-  headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
-  const parts = [`--${boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64Lines(text)}\r\n`];
-  for (const attachment of attachments) {
-    const filename = encodeURIComponent(attachment.filename).replace(/[!'()*]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
-    const data = attachment.buffer.toString('base64').match(/.{1,76}/g)?.join('\r\n') || '';
-    parts.push(`--${boundary}\r\nContent-Type: ${attachment.contentType}; name*=UTF-8''${filename}\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename*=UTF-8''${filename}\r\n\r\n${data}\r\n`);
-  }
-  return `${headers.join('\r\n')}\r\n\r\n${parts.join('')}--${boundary}--\r\n`;
+// "已发送"副本的原始 MIME 用 nodemailer 的 buffer 流传输构造，与实际发送走同一 MIME 引擎，
+// 避免手工拼接头部折叠、附件编码等边界问题；Bcc 不传入，副本头不含密送对象。
+const sentCopyComposer = nodemailer.createTransport({ streamTransport: 'buffer', buffer: true, newline: 'crlf', textEncoding: 'base64' });
+async function rawSentMessage({ email, label, to, cc, subject, text, messageId, inReplyTo, references, attachments = [] }) {
+  const info = await sentCopyComposer.sendMail({
+    from: { name: label, address: email }, to, cc, subject, text,
+    messageId, inReplyTo, references,
+    attachments: attachments.map((a) => ({ filename: a.filename, content: a.buffer, contentType: a.contentType }))
+  });
+  return info.message;
 }
 app.post('/api/send', auth, async (req, res) => {
   try {
@@ -2107,7 +2049,7 @@ app.post('/api/send', auth, async (req, res) => {
         sentCopySaved = await withImapClient(fresh, async (imap) => {
           const sentFolder = findFolder(await listMailboxes(fresh), 'Sent');
           if (!sentFolder) return false;
-          const source = rawSentMessage({ email:fresh.email, label:fresh.label, to, cc, subject, text:body, messageId, inReplyTo, references, attachments });
+          const source = await rawSentMessage({ email:fresh.email, label:fresh.label, to, cc, subject, text:body, messageId, inReplyTo, references, attachments });
           await imap.append(sentFolder, source, ['\\Seen']);
           return true;
         });
@@ -2133,7 +2075,7 @@ async function sendMcpMail(account, { to, cc = '', bcc = '', subject = '', text 
       sentCopySaved = await withImapClient(fresh, async (imap) => {
         const sentFolder = findFolder(await listMailboxes(fresh), 'Sent');
         if (!sentFolder) return false;
-        const source = rawSentMessage({ email: fresh.email, label: fresh.label, to, cc, subject, text, messageId });
+        const source = await rawSentMessage({ email: fresh.email, label: fresh.label, to, cc, subject, text, messageId });
         await imap.append(sentFolder, source, ['\\Seen']);
         return true;
       });

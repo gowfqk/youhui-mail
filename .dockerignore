@@ -9,6 +9,8 @@
 !security-policy.js
 !net-guard.js
 !verification-code.js
+!password-hash.js
+!backup-file.js
 !mail-frame.html
 !public/
 !public/**

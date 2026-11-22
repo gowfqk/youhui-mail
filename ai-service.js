@@ -416,6 +416,12 @@ export function attachAI(dependencies) {
   db.prepare('DELETE FROM ai_digest_runs WHERE day < ?').run(retentionCutoff);
   const rateLimits = new Map();
   const translationRateLimits = new Map();
+  // 限速表按会话键累积；每分钟清理 5 分钟未活跃的键，避免长期驻留
+  setInterval(() => {
+    const cutoff = Date.now() - 5 * 60_000;
+    for (const [key, entry] of rateLimits) if (entry.startedAt < cutoff) rateLimits.delete(key);
+    for (const [key, entry] of translationRateLimits) if (entry.startedAt < cutoff) translationRateLimits.delete(key);
+  }, 60_000).unref?.();
   const dependenciesForDigest = { db, mapAccount, withFreshAccount, makeImap, simpleParser, encrypt };
 
   app.get('/api/translation/config', auth, (req, res) => {

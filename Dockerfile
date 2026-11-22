@@ -8,7 +8,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
-COPY server.js ai-service.js mcp-service.js email-html.js security-policy.js net-guard.js verification-code.js mail-frame.html ./
+COPY server.js ai-service.js mcp-service.js email-html.js security-policy.js net-guard.js verification-code.js password-hash.js backup-file.js mail-frame.html ./
 COPY public ./public
 
 FROM node:24-bookworm-slim AS runtime

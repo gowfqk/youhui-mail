@@ -68,6 +68,7 @@ import com.youhui.mail.data.remote.readableMessage
 import com.youhui.mail.util.Formatters
 import kotlinx.coroutines.launch
 import java.util.Locale
+import com.youhui.mail.util.t
 
 /** 邮件详情：雷鸟风格头部 + 受限 WebView 正文 + 附件芯片与流式下载。 */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -124,7 +125,7 @@ fun MessageDetailScreen(
                 // 已成功回填到正文的内嵌图：不再在附件区重复展示
                 referencedInlineIndices = result.embeddedIndices
                 if (result.failed > 0) {
-                    snackbar.showSnackbar("部分内嵌图片未能加载（${result.failed} 张）。")
+                    snackbar.showSnackbar(t("部分内嵌图片未能加载（${result.failed} 张）。"))
                 }
             }
         } catch (e: Exception) {
@@ -132,7 +133,7 @@ fun MessageDetailScreen(
             val cached = serviceLocator.mailCache.cachedDetail(accountId, uid, folder)
             if (cached != null) {
                 message = cached
-                snackbar.showSnackbar("离线缓存：无法连接服务器，显示最近一次已读内容。")
+                snackbar.showSnackbar(t("离线缓存：无法连接服务器，显示最近一次已读内容。"))
             } else {
                 // 括号内为诊断信息：HTTP 状态码或异常类名，报告问题时请一并反馈
                 error = e.toUserMessage() + when (e) {
@@ -182,7 +183,7 @@ fun MessageDetailScreen(
         if (translating) return
         val source = mailTextForTranslation(detail)
         if (source.isEmpty()) {
-            scope.launch { snackbar.showSnackbar("这封邮件没有可翻译的正文。") }
+            scope.launch { snackbar.showSnackbar(t("这封邮件没有可翻译的正文。")) }
             return
         }
         scope.launch {
@@ -255,31 +256,31 @@ fun MessageDetailScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回"))
                     }
                 },
                 actions = {
                     if (message != null) {
                         IconButton(onClick = { translateCurrent() }, enabled = !translating) {
-                            Icon(Icons.Filled.Translate, contentDescription = "翻译为简体中文")
+                            Icon(Icons.Filled.Translate, contentDescription = t("翻译为简体中文"))
                         }
                         IconButton(onClick = {
                             aiMenuOpen = true
                         }) {
-                            Icon(Icons.Filled.AutoAwesome, contentDescription = "AI 助手")
+                            Icon(Icons.Filled.AutoAwesome, contentDescription = t("AI 助手"))
                         }
                         DropdownMenu(expanded = aiMenuOpen, onDismissRequest = { aiMenuOpen = false }) {
                             DropdownMenuItem(
-                                text = { Text("AI 解释这封邮件") },
+                                text = { Text(t("AI 解释这封邮件")) },
                                 onClick = { aiMenuOpen = false; onAi("explain") }
                             )
                             DropdownMenuItem(
-                                text = { Text("AI 起草回复") },
+                                text = { Text(t("AI 起草回复")) },
                                 onClick = { aiMenuOpen = false; onAi("reply") }
                             )
                         }
                         IconButton(onClick = { message?.let(onReply) }) {
-                            Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = "回复")
+                            Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = t("回复"))
                         }
                     }
                 }
@@ -324,7 +325,7 @@ fun MessageDetailScreen(
                                 )
                                 if (translation != null) {
                                     TextButton(onClick = { clipboard.setText(AnnotatedString(translation.orEmpty())) }) {
-                                        Text("复制")
+                                        Text(t("复制"))
                                     }
                                 }
                             }
@@ -345,7 +346,7 @@ fun MessageDetailScreen(
                                         color = MaterialTheme.colorScheme.error
                                     )
                                     if (translationNeedsConfig) {
-                                        TextButton(onClick = onOpenTranslationSettings) { Text("打开翻译设置") }
+                                        TextButton(onClick = onOpenTranslationSettings) { Text(t("打开翻译设置")) }
                                     }
                                 }
                                 else -> Column {
@@ -401,7 +402,7 @@ fun MessageDetailScreen(
                         loading = true
                         message = null
                         detailRetry++
-                    }) { Text("重试") }
+                    }) { Text(t("重试")) }
                 }
             }
         }

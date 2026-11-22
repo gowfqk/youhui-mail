@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.youhui.mail.data.remote.dto.AiConfigReq
 import com.youhui.mail.di.ServiceLocator
+import com.youhui.mail.util.t
 
 /** AI 模型设置（对齐网页工作台「AI 助手」）：服务商、地址、模型、Key 与每日摘要。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -103,9 +104,9 @@ fun AiSettingsScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("AI 助手设置") },
+                title = { Text(t("AI 助手设置")) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回")) }
                 }
             )
         }
@@ -140,8 +141,8 @@ fun AiSettingsScreen(
                     OutlinedTextField(
                         value = providerName,
                         onValueChange = { providerName = it.take(80) },
-                        label = { Text("服务商名称") },
-                        placeholder = { Text("例如 OpenAI 或自定义服务商") },
+                        label = { Text(t("服务商名称")) },
+                        placeholder = { Text(t("例如 OpenAI 或自定义服务商")) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -149,7 +150,7 @@ fun AiSettingsScreen(
                     OutlinedTextField(
                         value = baseUrl,
                         onValueChange = { baseUrl = it.take(500) },
-                        label = { Text("API 根地址") },
+                        label = { Text(t("API 根地址")) },
                         placeholder = { Text("https://api.your-provider.com/v1") },
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                         singleLine = true,
@@ -159,8 +160,8 @@ fun AiSettingsScreen(
                     OutlinedTextField(
                         value = model,
                         onValueChange = { model = it.take(200) },
-                        label = { Text("模型名称") },
-                        placeholder = { Text("服务商提供的模型 ID") },
+                        label = { Text(t("模型名称")) },
+                        placeholder = { Text(t("服务商提供的模型 ID")) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -168,7 +169,7 @@ fun AiSettingsScreen(
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it.take(4096) },
-                        label = { Text("模型 API Key") },
+                        label = { Text(t("模型 API Key")) },
                         placeholder = {
                             Text(if (config?.hasApiKey == true) "已保存；留空保留，输入新 Key 可替换" else "输入模型 API Key")
                         },
@@ -198,7 +199,7 @@ fun AiSettingsScreen(
                         OutlinedTextField(
                             value = dailyTime,
                             onValueChange = { dailyTime = it.take(5) },
-                            label = { Text("生成时间（香港时间）") },
+                            label = { Text(t("生成时间（香港时间）")) },
                             placeholder = { Text("08:00") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth()
@@ -212,7 +213,7 @@ fun AiSettingsScreen(
                             }
                             DropdownMenu(expanded = accountMenu, onDismissRequest = { accountMenu = false }) {
                                 DropdownMenuItem(
-                                    text = { Text("所有已连接邮箱") },
+                                    text = { Text(t("所有已连接邮箱")) },
                                     onClick = { dailyAccountId = "all"; accountMenu = false }
                                 )
                                 state.accounts.forEach { account ->
@@ -245,18 +246,18 @@ fun AiSettingsScreen(
                     onClick = { viewModel.save(payload()) },
                     enabled = state.busy == null && !state.loading,
                     modifier = Modifier.weight(1f)
-                ) { Text("保存设置") }
+                ) { Text(t("保存设置")) }
                 OutlinedButton(
                     onClick = { viewModel.test(payload()) },
                     enabled = state.busy == null && !state.loading,
                     modifier = Modifier.weight(1f)
-                ) { Text("测试 API") }
+                ) { Text(t("测试 API")) }
             }
             TextButton(
                 onClick = { confirmClear = true },
                 enabled = state.busy == null && config?.configured == true,
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("清除 AI 配置与已保存摘要") }
+            ) { Text(t("清除 AI 配置与已保存摘要")) }
             Spacer(Modifier.height(24.dp))
         }
     }
@@ -264,12 +265,12 @@ fun AiSettingsScreen(
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
-            title = { Text("清除 AI 配置？") },
-            text = { Text("会删除加密保存的 API Key、模型设置和已保存的 AI 摘要；不会影响邮箱账户或邮件。") },
+            title = { Text(t("清除 AI 配置？")) },
+            text = { Text(t("会删除加密保存的 API Key、模型设置和已保存的 AI 摘要；不会影响邮箱账户或邮件。")) },
             confirmButton = {
-                TextButton(onClick = { confirmClear = false; viewModel.clearConfig() }) { Text("清除") }
+                TextButton(onClick = { confirmClear = false; viewModel.clearConfig() }) { Text(t("清除")) }
             },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(t("取消")) } }
         )
     }
 }

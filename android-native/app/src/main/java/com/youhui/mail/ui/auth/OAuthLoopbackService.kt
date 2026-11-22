@@ -10,6 +10,7 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import com.youhui.mail.util.t
 
 /**
  * OAuth 回环登录期间的前台服务：在用户离开 App 去浏览器完成第三方登录的窗口内
@@ -34,7 +35,7 @@ class OAuthLoopbackService : Service() {
         }
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("邮汇")
-            .setContentText("正在等待第三方登录回调…")
+            .setContentText(t("正在等待第三方登录回调…"))
             .setSmallIcon(android.R.drawable.stat_notify_sync)
             .setOngoing(true)
             .build()

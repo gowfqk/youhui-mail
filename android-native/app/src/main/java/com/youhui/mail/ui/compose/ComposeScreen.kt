@@ -94,7 +94,7 @@ fun ComposeScreen(
                             if (!state.sending) {
                                 scope.launch {
                                     if (viewModel.sendFrom(context)) {
-                                        snackbar.showSnackbar("邮件已发送。")
+                                        snackbar.showSnackbar(t("邮件已发送。"))
                                         onFinished()
                                     }
                                 }

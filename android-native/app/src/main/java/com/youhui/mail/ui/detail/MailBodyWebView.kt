@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.youhui.mail.util.UrlGuards
+import com.youhui.mail.util.t
 
 private const val EXTERNAL_IMG_ATTR = "data-external-src"
 
@@ -70,7 +71,7 @@ fun MailBodyWebView(html: String, text: String, serverUrl: String, modifier: Mod
             Button(
                 onClick = { loadExternalImages = true },
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-            ) { Text("加载外部图片") }
+            ) { Text(t("加载外部图片")) }
         }
         AndroidView(
             factory = { context ->

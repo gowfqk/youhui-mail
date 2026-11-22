@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.youhui.mail.data.remote.dto.TranslationConfigReq
 import com.youhui.mail.di.ServiceLocator
+import com.youhui.mail.util.t
 
 private val providerLabels = mapOf(
     "niutrans" to "小牛翻译",
@@ -102,9 +103,9 @@ fun TranslationSettingsScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("邮件翻译") },
+                title = { Text(t("邮件翻译")) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回")) }
                 }
             )
         }
@@ -213,7 +214,7 @@ fun TranslationSettingsScreen(
                             OutlinedTextField(
                                 value = azureRegion,
                                 onValueChange = { azureRegion = it.take(100) },
-                                label = { Text("资源区域（Region）") },
+                                label = { Text(t("资源区域（Region）")) },
                                 placeholder = {
                                     Text(if (config?.hasAzureRegion == true) "已保存；留空保留" else "例如 eastasia")
                                 },
@@ -237,12 +238,12 @@ fun TranslationSettingsScreen(
                     onClick = { viewModel.save(payload()) },
                     enabled = state.busy == null && !state.loading,
                     modifier = Modifier.weight(1f)
-                ) { Text("保存翻译设置") }
+                ) { Text(t("保存翻译设置")) }
                 OutlinedButton(
                     onClick = { confirmClear = true },
                     enabled = state.busy == null && (config?.hasNiuTransAppId == true || config?.hasNiuTransApiKey == true ||
                         config?.hasGoogleApiKey == true || config?.hasAzureApiKey == true || config?.hasAzureRegion == true)
-                ) { Text("清除配置") }
+                ) { Text(t("清除配置")) }
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -251,12 +252,12 @@ fun TranslationSettingsScreen(
     if (confirmClear) {
         AlertDialog(
             onDismissRequest = { confirmClear = false },
-            title = { Text("清除翻译配置？") },
-            text = { Text("会删除加密保存的所有翻译服务商凭据；不会影响 AI 配置、邮箱账户或邮件。") },
+            title = { Text(t("清除翻译配置？")) },
+            text = { Text(t("会删除加密保存的所有翻译服务商凭据；不会影响 AI 配置、邮箱账户或邮件。")) },
             confirmButton = {
-                TextButton(onClick = { confirmClear = false; viewModel.clearConfig() }) { Text("清除") }
+                TextButton(onClick = { confirmClear = false; viewModel.clearConfig() }) { Text(t("清除")) }
             },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(t("取消")) } }
         )
     }
 }

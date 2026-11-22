@@ -66,6 +66,7 @@ import com.youhui.mail.data.remote.dto.AccountSummaryDto
 import com.youhui.mail.di.ServiceLocator
 import kotlinx.coroutines.launch
 import java.io.File
+import com.youhui.mail.util.t
 
 private val identityLabels = mapOf("google" to "Google", "github" to "GitHub", "cloudflare" to "Cloudflare")
 
@@ -138,9 +139,9 @@ fun SettingsScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("设置") },
+                title = { Text(t("设置")) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回")) }
                 }
             )
         }
@@ -161,7 +162,7 @@ fun SettingsScreen(
             }
 
             // ---------- 邮箱账户 ----------
-            SettingsCard(title = "邮箱账户", icon = Icons.Filled.Email) {
+            SettingsCard(title = t("邮箱账户"), icon = Icons.Filled.Email) {
                 if (state.accounts.isEmpty() && !state.loading) {
                     Text("尚未连接邮箱账户。", style = MaterialTheme.typography.bodySmall)
                 }
@@ -194,23 +195,23 @@ fun SettingsScreen(
                             )
                         }
                         if (account.id != state.defaultAccountId) {
-                            TextButton(onClick = { viewModel.setDefaultAccount(account.id) }) { Text("设默认") }
+                            TextButton(onClick = { viewModel.setDefaultAccount(account.id) }) { Text(t("设默认")) }
                         }
                         IconButton(onClick = { pendingDelete = account }) {
-                            Icon(Icons.Filled.Delete, contentDescription = "删除账户")
+                            Icon(Icons.Filled.Delete, contentDescription = t("删除账户"))
                         }
                     }
                 }
                 Spacer(Modifier.height(4.dp))
                 AssistChip(
                     onClick = onAddAccount,
-                    label = { Text("添加邮箱账户") },
+                    label = { Text(t("添加邮箱账户")) },
                     leadingIcon = { Icon(Icons.Filled.Add, contentDescription = null, Modifier.size(18.dp)) }
                 )
             }
 
             // ---------- AI 助手 ----------
-            SettingsCard(title = "AI 助手", icon = Icons.Filled.AutoAwesome) {
+            SettingsCard(title = t("AI 助手"), icon = Icons.Filled.AutoAwesome) {
                 val ai = state.aiConfig
                 Text(
                     if (ai?.configured == true) {
@@ -230,13 +231,13 @@ fun SettingsScreen(
                 }
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AssistChip(onClick = onOpenAi, label = { Text("打开 AI 助手") })
+                    AssistChip(onClick = onOpenAi, label = { Text(t("打开 AI 助手")) })
                     AssistChip(onClick = onOpenAiSettings, label = { Text(if (ai?.configured == true) "模型设置" else "配置模型") })
                 }
             }
 
             // ---------- 邮件翻译 ----------
-            SettingsCard(title = "邮件翻译", icon = Icons.Filled.Translate) {
+            SettingsCard(title = t("邮件翻译"), icon = Icons.Filled.Translate) {
                 val translation = state.translationConfig
                 val providerName = mapOf(
                     "niutrans" to "小牛翻译",
@@ -276,11 +277,11 @@ fun SettingsScreen(
                     )
                 }
                 Spacer(Modifier.height(6.dp))
-                AssistChip(onClick = onOpenMcp, label = { Text("打开 Agent / MCP 设置") })
+                AssistChip(onClick = onOpenMcp, label = { Text(t("打开 Agent / MCP 设置")) })
             }
 
             // ---------- 新邮件检查 ----------
-            SettingsCard(title = "新邮件检查", icon = Icons.Filled.Notifications) {
+            SettingsCard(title = t("新邮件检查"), icon = Icons.Filled.Notifications) {
                 val notification = state.notification
                 if (notification == null) {
                     Text("加载中…", style = MaterialTheme.typography.bodySmall)
@@ -317,7 +318,7 @@ fun SettingsScreen(
             }
 
             // ---------- 备份与恢复 ----------
-            SettingsCard(title = "备份与恢复", icon = Icons.Filled.Backup) {
+            SettingsCard(title = t("备份与恢复"), icon = Icons.Filled.Backup) {
                 Text(
                     "备份包含全部账户与设置（不含登录会话）。恢复会替换当前数据并退出所有会话。",
                     style = MaterialTheme.typography.bodySmall,
@@ -331,7 +332,7 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Filled.Backup, contentDescription = null, Modifier.size(16.dp))
                         Spacer(Modifier.size(6.dp))
-                        Text("导出备份")
+                        Text(t("导出备份"))
                     }
                     OutlinedButton(
                         onClick = { restorePicker.launch(arrayOf("application/octet-stream", "application/vnd.youhui-mail.backup", "*/*")) },
@@ -339,13 +340,13 @@ fun SettingsScreen(
                     ) {
                         Icon(Icons.Filled.Restore, contentDescription = null, Modifier.size(16.dp))
                         Spacer(Modifier.size(6.dp))
-                        Text("恢复备份")
+                        Text(t("恢复备份"))
                     }
                 }
             }
 
             // ---------- 身份绑定 ----------
-            SettingsCard(title = "第三方身份", icon = Icons.Filled.VerifiedUser) {
+            SettingsCard(title = t("第三方身份"), icon = Icons.Filled.VerifiedUser) {
                 val bound = state.identityProviders.filterValues { it }
                 if (bound.isEmpty()) {
                     Text(
@@ -361,19 +362,19 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f)
                         )
-                        TextButton(onClick = { viewModel.unbindIdentity(provider) }) { Text("解除绑定") }
+                        TextButton(onClick = { viewModel.unbindIdentity(provider) }) { Text(t("解除绑定")) }
                     }
                 }
             }
 
             // ---------- 设备 / 服务器 / 退出 ----------
-            SettingsCard(title = "其他", icon = Icons.Filled.Devices) {
+            SettingsCard(title = t("其他"), icon = Icons.Filled.Devices) {
                 Row(
                     Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("设备管理", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-                    TextButton(onClick = onOpenDevices) { Text("打开") }
+                    TextButton(onClick = onOpenDevices) { Text(t("打开")) }
                 }
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     Text("服务器", style = MaterialTheme.typography.bodyMedium)
@@ -395,7 +396,7 @@ fun SettingsScreen(
                     OutlinedButton(onClick = { confirmLogout = true }) {
                         Icon(Icons.Filled.Logout, contentDescription = null, Modifier.size(16.dp))
                         Spacer(Modifier.size(6.dp))
-                        Text("退出")
+                        Text(t("退出"))
                     }
                 }
             }
@@ -407,10 +408,10 @@ fun SettingsScreen(
     pendingDelete?.let { account ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("删除邮箱账户？") },
-            text = { Text("将从工作台移除「${account.label?.takeIf { it.isNotBlank() } ?: account.email}」及其通知记录；不影响邮箱服务器上的邮件。") },
-            confirmButton = { TextButton(onClick = { viewModel.deleteAccount(account); pendingDelete = null }) { Text("删除") } },
-            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("取消") } }
+            title = { Text(t("删除邮箱账户？")) },
+            text = { Text(t("将从工作台移除「${account.label?.takeIf { it.isNotBlank() } ?: account.email}」及其通知记录；不影响邮箱服务器上的邮件。")) },
+            confirmButton = { TextButton(onClick = { viewModel.deleteAccount(account); pendingDelete = null }) { Text(t("删除")) } },
+            dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(t("取消")) } }
         )
     }
 
@@ -418,16 +419,16 @@ fun SettingsScreen(
     pendingRestore?.let { uri ->
         AlertDialog(
             onDismissRequest = { pendingRestore = null },
-            title = { Text("确认恢复备份？") },
+            title = { Text(t("确认恢复备份？")) },
             text = {
                 Column {
-                    Text("恢复会替换当前全部账户与设置，并退出所有登录会话。")
+                    Text(t("恢复会替换当前全部账户与设置，并退出所有登录会话。"))
                     Text("如果备份是加密的，请输入创建时设置的密码；明文备份留空。", style = MaterialTheme.typography.bodySmall)
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = restorePassphrase,
                         onValueChange = { restorePassphrase = it },
-                        label = { Text("备份密码（可选）") },
+                        label = { Text(t("备份密码（可选）")) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
@@ -438,9 +439,9 @@ fun SettingsScreen(
                     val target = pendingRestore
                     pendingRestore = null
                     if (target != null) viewModel.restoreBackup(context, target, restorePassphrase)
-                }) { Text("恢复") }
+                }) { Text(t("恢复")) }
             },
-            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { pendingRestore = null }) { Text(t("取消")) } }
         )
     }
 
@@ -448,15 +449,15 @@ fun SettingsScreen(
     if (confirmLogout) {
         AlertDialog(
             onDismissRequest = { confirmLogout = false },
-            title = { Text("退出登录？") },
-            text = { Text("将吊销本设备的会话并清空本地缓存，需要重新输入工作台密码。") },
+            title = { Text(t("退出登录？")) },
+            text = { Text(t("将吊销本设备的会话并清空本地缓存，需要重新输入工作台密码。")) },
             confirmButton = {
                 TextButton(onClick = {
                     confirmLogout = false
                     viewModel.logout(onDone = onLoggedOut)
-                }) { Text("退出") }
+                }) { Text(t("退出")) }
             },
-            dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { confirmLogout = false }) { Text(t("取消")) } }
         )
     }
 }

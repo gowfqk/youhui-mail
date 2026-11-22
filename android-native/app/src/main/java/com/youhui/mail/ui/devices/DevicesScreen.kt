@@ -42,6 +42,7 @@ import com.youhui.mail.di.ServiceLocator
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.youhui.mail.util.t
 
 /** 设备会话管理：全部移动端会话、吊销、推送登记状态诊断。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,7 +64,7 @@ fun DevicesScreen(
     }
     LaunchedEffect(state.revokedSelf) {
         if (state.revokedSelf) {
-            snackbar.showSnackbar("本机会话已吊销，请重新登录。")
+            snackbar.showSnackbar(t("本机会话已吊销，请重新登录。"))
             onSessionRevokedSelf()
         }
     }
@@ -72,9 +73,9 @@ fun DevicesScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("设备管理") },
+                title = { Text(t("设备管理")) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回")) }
                 }
             )
         }
@@ -134,7 +135,7 @@ fun DevicesScreen(
                                 Text("到期时间：${formatEpoch(session.expiresAt)}", style = MaterialTheme.typography.bodySmall)
                             }
                             IconButton(onClick = { confirmTarget = session.deviceId }) {
-                                Icon(Icons.Filled.Delete, contentDescription = "吊销此设备会话")
+                                Icon(Icons.Filled.Delete, contentDescription = t("吊销此设备会话"))
                             }
                         }
                     }
@@ -146,13 +147,13 @@ fun DevicesScreen(
     confirmTarget?.let { deviceId ->
         AlertDialog(
             onDismissRequest = { confirmTarget = null },
-            title = { Text("吊销此设备的会话？") },
-            text = { Text("吊销后该设备需要重新登录才能访问邮箱；该设备的推送登记也会一并移除。") },
+            title = { Text(t("吊销此设备的会话？")) },
+            text = { Text(t("吊销后该设备需要重新登录才能访问邮箱；该设备的推送登记也会一并移除。")) },
             confirmButton = {
-                TextButton(onClick = { confirmTarget = null; viewModel.revoke(deviceId) }) { Text("吊销") }
+                TextButton(onClick = { confirmTarget = null; viewModel.revoke(deviceId) }) { Text(t("吊销")) }
             },
             dismissButton = {
-                TextButton(onClick = { confirmTarget = null }) { Text("取消") }
+                TextButton(onClick = { confirmTarget = null }) { Text(t("取消")) }
             }
         )
     }

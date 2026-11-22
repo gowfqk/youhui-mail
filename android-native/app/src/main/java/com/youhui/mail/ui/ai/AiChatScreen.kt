@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.youhui.mail.di.ServiceLocator
+import com.youhui.mail.util.t
 
 /**
  * AI 助手页：对话、收件摘要、模型状态；从邮件详情进入时自动携带该邮件并发起解释 / 起草。
@@ -110,18 +111,18 @@ fun AiChatScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("AI 助手") },
+                title = { Text(t("AI 助手")) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回")) }
                 },
                 actions = {
                     if (state.messages.isNotEmpty()) {
                         IconButton(onClick = { viewModel.clearConversation() }) {
-                            Icon(Icons.Filled.DeleteSweep, contentDescription = "清空对话")
+                            Icon(Icons.Filled.DeleteSweep, contentDescription = t("清空对话"))
                         }
                     }
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "AI 设置")
+                        Icon(Icons.Filled.Settings, contentDescription = t("AI 设置"))
                     }
                 }
             )
@@ -151,9 +152,9 @@ fun AiChatScreen(
                         )
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(onClick = onOpenSettings) { Text("配置模型 API") }
+                            Button(onClick = onOpenSettings) { Text(t("配置模型 API")) }
                             if (state.configError != null) {
-                                OutlinedButton(onClick = { viewModel.refreshConfig() }) { Text("重试") }
+                                OutlinedButton(onClick = { viewModel.refreshConfig() }) { Text(t("重试")) }
                             }
                         }
                     }
@@ -212,11 +213,11 @@ fun AiChatScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box {
                             OutlinedButton(onClick = { scopeMenu = true }, enabled = state.configured && !state.busy) {
-                                Text("摘要：${viewModel.scopeLabel(digestScope)}")
+                                Text(t("摘要：${viewModel.scopeLabel(digestScope)}"))
                             }
                             DropdownMenu(expanded = scopeMenu, onDismissRequest = { scopeMenu = false }) {
                                 DropdownMenuItem(
-                                    text = { Text("所有已连接邮箱") },
+                                    text = { Text(t("所有已连接邮箱")) },
                                     onClick = { digestScope = "all"; scopeMenu = false }
                                 )
                                 state.accounts.forEach { account ->
@@ -231,7 +232,7 @@ fun AiChatScreen(
                         TextButton(
                             onClick = { viewModel.generateDigest(digestScope) },
                             enabled = state.configured && !state.busy
-                        ) { Text("生成昨日 24 小时摘要") }
+                        ) { Text(t("生成昨日 24 小时摘要")) }
                     }
                     Row(verticalAlignment = Alignment.Bottom) {
                         OutlinedTextField(
@@ -246,7 +247,7 @@ fun AiChatScreen(
                         )
                         Spacer(Modifier.size(6.dp))
                         IconButton(onClick = { submit() }, enabled = state.configured && !state.busy && input.isNotBlank()) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "发送")
+                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = t("发送"))
                         }
                     }
                 }

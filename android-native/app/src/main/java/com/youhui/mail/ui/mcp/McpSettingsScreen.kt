@@ -56,6 +56,7 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.youhui.mail.util.t
 
 private data class McpPermissionInfo(
     val id: String,
@@ -118,11 +119,11 @@ fun McpSettingsScreen(
             TopAppBar(
                 title = { Text("Agent / MCP") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回")) }
                 },
                 actions = {
                     IconButton(onClick = { viewModel.refresh() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "刷新")
+                        Icon(Icons.Filled.Refresh, contentDescription = t("刷新"))
                     }
                 }
             )
@@ -169,7 +170,7 @@ fun McpSettingsScreen(
                             },
                             enabled = !state.config?.endpoint.isNullOrBlank()
                         ) {
-                            Icon(Icons.Filled.ContentCopy, contentDescription = "复制端点")
+                            Icon(Icons.Filled.ContentCopy, contentDescription = t("复制端点"))
                         }
                     }
                 }
@@ -243,20 +244,20 @@ fun McpSettingsScreen(
                                 OutlinedButton(
                                     onClick = { rotateTarget = definition },
                                     enabled = state.busy == null
-                                ) { Text("轮换令牌") }
+                                ) { Text(t("轮换令牌")) }
                                 TextButton(
                                     onClick = { openScopeDialog(definition) },
                                     enabled = state.busy == null
-                                ) { Text("设置范围") }
+                                ) { Text(t("设置范围")) }
                                 TextButton(
                                     onClick = { revokeTarget = definition },
                                     enabled = state.busy == null
-                                ) { Text("撤销") }
+                                ) { Text(t("撤销")) }
                             } else {
                                 Button(
                                     onClick = { openScopeDialog(definition) },
                                     enabled = state.busy == null
-                                ) { Text("创建令牌") }
+                                ) { Text(t("创建令牌")) }
                             }
                         }
                     }
@@ -286,9 +287,9 @@ fun McpSettingsScreen(
                             Button(onClick = { clipboard.setText(AnnotatedString(token)) }) {
                                 Icon(Icons.Filled.ContentCopy, contentDescription = null, Modifier.size(16.dp))
                                 Spacer(Modifier.size(6.dp))
-                                Text("复制令牌")
+                                Text(t("复制令牌"))
                             }
-                            OutlinedButton(onClick = { viewModel.clearTokenReveal() }) { Text("收起") }
+                            OutlinedButton(onClick = { viewModel.clearTokenReveal() }) { Text(t("收起")) }
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(
@@ -362,7 +363,7 @@ fun McpSettingsScreen(
                             OutlinedButton(
                                 onClick = { viewModel.deny(approval.id) },
                                 enabled = state.busy == null
-                            ) { Text("拒绝") }
+                            ) { Text(t("拒绝")) }
                         }
                     }
                 }
@@ -427,7 +428,7 @@ fun McpSettingsScreen(
                     enabled = scopeAll || scopeIds.isNotEmpty()
                 ) { Text(if (creating) "创建" else "保存") }
             },
-            dismissButton = { TextButton(onClick = { scopeTarget = null }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { scopeTarget = null }) { Text(t("取消")) } }
         )
     }
 
@@ -435,8 +436,8 @@ fun McpSettingsScreen(
     rotateTarget?.let { permission ->
         AlertDialog(
             onDismissRequest = { rotateTarget = null },
-            title = { Text("轮换 ${permission.label} 令牌？") },
-            text = { Text("现有令牌会立即失效；已连接的 Agent 需要更新为新令牌。邮箱范围保持不变。") },
+            title = { Text(t("轮换 ${permission.label} 令牌？")) },
+            text = { Text(t("现有令牌会立即失效；已连接的 Agent 需要更新为新令牌。邮箱范围保持不变。")) },
             confirmButton = {
                 TextButton(onClick = {
                     val current = viewModel.permission(permission.id)
@@ -446,9 +447,9 @@ fun McpSettingsScreen(
                         current.accountIds.toSet()
                     )
                     rotateTarget = null
-                }) { Text("轮换") }
+                }) { Text(t("轮换")) }
             },
-            dismissButton = { TextButton(onClick = { rotateTarget = null }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { rotateTarget = null }) { Text(t("取消")) } }
         )
     }
 
@@ -456,12 +457,12 @@ fun McpSettingsScreen(
     revokeTarget?.let { permission ->
         AlertDialog(
             onDismissRequest = { revokeTarget = null },
-            title = { Text("撤销 ${permission.label} 令牌？") },
-            text = { Text("使用此令牌的 Agent 会立即失去对应权限；其他权限的令牌不受影响。") },
+            title = { Text(t("撤销 ${permission.label} 令牌？")) },
+            text = { Text(t("使用此令牌的 Agent 会立即失去对应权限；其他权限的令牌不受影响。")) },
             confirmButton = {
-                TextButton(onClick = { viewModel.revokeToken(permission.id); revokeTarget = null }) { Text("撤销") }
+                TextButton(onClick = { viewModel.revokeToken(permission.id); revokeTarget = null }) { Text(t("撤销")) }
             },
-            dismissButton = { TextButton(onClick = { revokeTarget = null }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { revokeTarget = null }) { Text(t("取消")) } }
         )
     }
 
@@ -485,7 +486,7 @@ fun McpSettingsScreen(
                     Text(if (send) "确认并发送" else "移入已删除")
                 }
             },
-            dismissButton = { TextButton(onClick = { approveTarget = null }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { approveTarget = null }) { Text(t("取消")) } }
         )
     }
 }

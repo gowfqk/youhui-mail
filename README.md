@@ -6,7 +6,7 @@
 
 - 统一收件箱、多邮箱筛选、搜索、分页，以及已发送、草稿、归档、垃圾邮件、已删除、星标和自定义 IMAP 文件夹。
 - 打开邮件正文、下载附件、发送附件（单封最多 10 个、总计 18 MB）、标记已读/未读、加星/取消星、归档、移至已删除、回复，以及从所选邮箱发信。
-- 可添加多个 IMAP/SMTP 账户。内置服务器快速配置：Gmail、Outlook/Microsoft 365、Yahoo、iCloud、Fastmail、网易 163、QQ、Zoho；也支持任何提供标准 IMAP/SMTP 访问的自定义域名邮箱。
+- 可添加多个 IMAP/SMTP 账户。内置服务器快速配置：Gmail、Outlook/Microsoft 365、Yahoo、iCloud、Fastmail、网易 163 / 126 / Yeah.net、QQ / 腾讯企业邮、新浪、中国移动 139、中国电信 189、阿里企业邮、Zoho、Yandex、AOL；也支持任何提供标准 IMAP/SMTP 访问的自定义域名邮箱。
 - Google/Microsoft OAuth 邮箱授权；支持 Google、GitHub、Cloudflare Access / Zero Trust OIDC 第三方登录，身份绑定后 OAuth 成功即可解锁工作台。
 - 统一设置内配置 AI、翻译、定时邮件检查、浏览器提醒与可手动测试的 Webhook；可查看各邮箱的 IMAP/IDLE 连接状态、最近成功同步时间和重连错误。邮件内嵌图片正常显示，远程图片默认阻止并可逐封加载。
 - 首次设置工作台密码；邮箱凭据以 AES-256-GCM 加密保存在本地数据目录；备份可选择使用口令加密，也可导出未加密文件。登录密码使用 scrypt 哈希，服务端通过 TLS 连接邮件服务器，并配置基础安全响应头。

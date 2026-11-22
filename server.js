@@ -293,7 +293,19 @@ const presets = {
   microsoft: { imapHost: 'outlook.office365.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.office365.com', smtpPort: 587, smtpSecure: false },
   yahoo: { imapHost: 'imap.mail.yahoo.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.mail.yahoo.com', smtpPort: 465, smtpSecure: true },
   icloud: { imapHost: 'imap.mail.me.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.mail.me.com', smtpPort: 587, smtpSecure: false },
-  fastmail: { imapHost: 'imap.fastmail.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.fastmail.com', smtpPort: 465, smtpSecure: true }
+  fastmail: { imapHost: 'imap.fastmail.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.fastmail.com', smtpPort: 465, smtpSecure: true },
+  '163': { imapHost: 'imap.163.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.163.com', smtpPort: 465, smtpSecure: true },
+  '126': { imapHost: 'imap.126.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.126.com', smtpPort: 465, smtpSecure: true },
+  yeah: { imapHost: 'imap.yeah.net', imapPort: 993, imapSecure: true, smtpHost: 'smtp.yeah.net', smtpPort: 465, smtpSecure: true },
+  qq: { imapHost: 'imap.qq.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.qq.com', smtpPort: 465, smtpSecure: true },
+  exmail: { imapHost: 'imap.exmail.qq.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.exmail.qq.com', smtpPort: 465, smtpSecure: true },
+  sina: { imapHost: 'imap.sina.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.sina.com', smtpPort: 465, smtpSecure: true },
+  '139': { imapHost: 'imap.139.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.139.com', smtpPort: 465, smtpSecure: true },
+  '189': { imapHost: 'imap.189.cn', imapPort: 993, imapSecure: true, smtpHost: 'smtp.189.cn', smtpPort: 465, smtpSecure: true },
+  aliyun: { imapHost: 'imap.qiye.aliyun.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.qiye.aliyun.com', smtpPort: 465, smtpSecure: true },
+  zoho: { imapHost: 'imap.zoho.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.zoho.com', smtpPort: 465, smtpSecure: true },
+  yandex: { imapHost: 'imap.yandex.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.yandex.com', smtpPort: 465, smtpSecure: true },
+  aol: { imapHost: 'imap.aol.com', imapPort: 993, imapSecure: true, smtpHost: 'smtp.aol.com', smtpPort: 465, smtpSecure: true }
 };
 const mailboxOAuthDefinitions = {
   google: {

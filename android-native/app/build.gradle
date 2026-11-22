@@ -22,8 +22,8 @@ android {
         applicationId 'com.youhui.mail'
         minSdk 27
         targetSdk 35
-        versionCode 16
-        versionName '2.4.4-native'
+        versionCode 17
+        versionName '2.4.5-native'
     }
 
     // 签名：CI/本地通过环境变量注入固定密钥库（PKCS12），跨构建签名一致、可覆盖安装；

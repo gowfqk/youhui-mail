@@ -3,6 +3,51 @@ const state = {
   messages: [], total: 0, selected: null, detail: null, olderFirst: false, busy: false, searchTimer: null, mailListRequestId: 0,
   aiConfig: null, translationConfig: null, notificationConfig: null, oauthConfig: null, mcpConfig: null, aiMessages: [], aiContext: null, aiBusy: false
 };
+// ---- 语言 / i18n：zh 为默认，localStorage 记忆，切换后整页刷新 ----
+const I18N_LANG = (() => {
+  try {
+    const saved = localStorage.getItem('youhui_lang');
+    if (saved === 'en' || saved === 'zh') return saved;
+    return (navigator.language || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+  } catch { return 'zh'; }
+})();
+const I18N_EN = (window.YouhuiI18n && window.YouhuiI18n.en) || {};
+const L = (s) => (I18N_LANG === 'en' && typeof s === 'string' && I18N_EN[s] != null) ? I18N_EN[s] : s;
+const UI_LOCALE = I18N_LANG === 'en' ? 'en-US' : 'zh-CN';
+// 把词典应用到静态 DOM：文本节点按去除首尾空格后的原文精确匹配；placeholder/title/aria-label 按属性值精确匹配
+function applyI18nDom(root = document) {
+  if (I18N_LANG !== 'en' || !root) return;
+  const dict = I18N_EN;
+  const tree = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  for (let node = tree.nextNode(); node; node = tree.nextNode()) {
+    const text = node.textContent;
+    const key = text.trim();
+    if (key && dict[key] != null) hits.push([node, key, dict[key]]);
+  }
+  for (const [node, key, value] of hits) node.textContent = text.replace ? text.replace(key, value) : value;
+  if (root.querySelectorAll) {
+    root.querySelectorAll('[placeholder],[title],[aria-label]').forEach((el) => {
+      for (const attr of ['placeholder', 'title', 'aria-label']) {
+        const value = el.getAttribute(attr);
+        if (value && dict[value.trim()] != null) el.setAttribute(attr, dict[value.trim()]);
+      }
+    });
+  }
+}
+function syncLangToggle() {
+  document.querySelectorAll('[data-lang-toggle]').forEach((button) => {
+    button.textContent = I18N_LANG === 'en' ? '中文' : 'EN';
+    button.title = I18N_LANG === 'en' ? '切换到中文' : 'Switch to English';
+  });
+}
+function toggleLanguage() {
+  try { localStorage.setItem('youhui_lang', I18N_LANG === 'en' ? 'zh' : 'en'); } catch {}
+  location.reload();
+}
+document.addEventListener('click', (event) => {
+  if (event.target.closest('[data-lang-toggle]')) toggleLanguage();
+});
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const mailListCache = window.YouhuiMailListCache.create();
@@ -26,6 +71,7 @@ let openMessageContext = null;
 const pendingMessageActions = new Set();
 let composeFiles = [];
 let composeReplyMeta = null;
+let composeIsReply = false;
 let notificationPollTimer = null;
 let notificationPollInFlight = false;
 let mcpApprovalPollTimer = null;
@@ -40,12 +86,12 @@ async function api(url, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     if (response.status === 401 && !['/api/login','/api/setup','/api/status'].includes(url)) showAuth();
-    throw new Error(data.error || `请求失败 (${response.status})`);
+    throw new Error(data.error || (I18N_LANG === 'en' ? `Request failed (${response.status})` : `请求失败 (${response.status})`));
   }
   return data;
 }
 function toast(message, isError = false) {
-  const el = $('#toast'); el.textContent = message; el.classList.toggle('error', isError); el.classList.add('visible');
+  const el = $('#toast'); el.textContent = L(message); el.classList.toggle('error', isError); el.classList.add('visible');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('visible'), 3200);
 }
 function escapeHtml(value = '') {
@@ -53,9 +99,9 @@ function escapeHtml(value = '') {
 }
 function initials(value = '') {
   const s = String(value).trim();
-  if (!s) return '邮';
+    if (!s) return I18N_LANG === 'en' ? 'Y' : '邮';
   const beforeAt = s.includes('@') ? s.slice(0, s.indexOf('@')) : s;
-  return [...beforeAt][0]?.toUpperCase() || '邮';
+  return [...beforeAt][0]?.toUpperCase() || (I18N_LANG === 'en' ? 'Y' : '邮');
 }
 function colorClass(value = '') { let sum = 0; for (const c of value) sum = (sum * 31 + c.charCodeAt(0)) >>> 0; return `tone-${sum % accountColors.length}`; }
 function accountProviderIcon(account = {}) {
@@ -81,13 +127,13 @@ function dateShort(value) {
   if (!value) return '';
   const date = new Date(value); if (Number.isNaN(date.getTime())) return '';
   const now = new Date();
-  if (date.toDateString() === now.toDateString()) return date.toLocaleTimeString('zh-CN', { hour:'2-digit', minute:'2-digit' });
-  if (date.getFullYear() === now.getFullYear()) return `${date.getMonth()+1}月${date.getDate()}日`;
-  return date.toLocaleDateString('zh-CN', { year:'numeric', month:'numeric', day:'numeric' });
+  if (date.toDateString() === now.toDateString()) return date.toLocaleTimeString(UI_LOCALE, { hour:'2-digit', minute:'2-digit' });
+  if (date.getFullYear() === now.getFullYear()) return I18N_LANG === 'en' ? `${date.getMonth()+1}/${date.getDate()}` : `${date.getMonth()+1}月${date.getDate()}日`;
+  return date.toLocaleDateString(UI_LOCALE, { year:'numeric', month:'numeric', day:'numeric' });
 }
 function dateLong(value) {
   if (!value) return '';
-  const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit' });
+  const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleString(UI_LOCALE, { year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit' });
 }
 function formatSize(bytes) {
   if (!bytes) return '';
@@ -104,12 +150,12 @@ function showAuth() {
   stopMailboxStatusPolling();
   $('#appView').classList.add('hidden'); $('#authView').classList.remove('hidden');
   const needsSetup = state.status?.setupRequired;
-  $('#authTitle').textContent = needsSetup ? '创建你的私人工作台' : '欢迎回来';
-  $('#authCopy').textContent = needsSetup ? '先设置一个工作台密码，再安全连接你的邮箱。' : '输入工作台密码，继续管理你的邮箱。';
-  $('#authSubmit').textContent = needsSetup ? '创建并进入' : '解锁工作台';
+  $('#authTitle').textContent = needsSetup ? L('创建你的私人工作台') : L('欢迎回来');
+  $('#authCopy').textContent = needsSetup ? L('先设置一个工作台密码，再安全连接你的邮箱。') : L('输入工作台密码，继续管理你的邮箱。');
+  $('#authSubmit').textContent = needsSetup ? L('创建并进入') : L('解锁工作台');
   $('#authPassword').autocomplete = needsSetup ? 'new-password' : 'current-password';
   $('#authPassword').minLength = needsSetup ? 12 : 1;
-  $('#authHint').textContent = needsSetup ? '请设置至少 12 位的密码；它只保护此工作台，不会发送给邮箱服务商。' : '登录密码只用于解锁此工作台。';
+  $('#authHint').textContent = needsSetup ? L('请设置至少 12 位的密码；它只保护此工作台，不会发送给邮箱服务商。') : L('登录密码只用于解锁此工作台。');
   const enabled = state.status?.identityProviders || {};
   let visible = false;
   $$('[data-external-login]').forEach((button) => {
@@ -119,27 +165,28 @@ function showAuth() {
   $('#externalLoginOptions').classList.toggle('hidden', !visible);
 }
 async function boot() {
+  applyI18nDom(); syncLangToggle(); document.documentElement.lang = I18N_LANG === 'en' ? 'en' : 'zh-CN';
   try {
     state.status = await api('/api/status');
     if (state.status.authenticated) await showApp(); else showAuth();
     const params = new URLSearchParams(location.search);
-    if (params.get('oauth') === 'connected') { history.replaceState({}, '', '/'); toast('邮箱已通过 OAuth 授权并连接。'); }
-    if (params.get('oauth_error')) { history.replaceState({}, '', '/'); toast(`OAuth 连接失败：${params.get('oauth_error')}`, true); }
-    if (params.get('identity') === 'connected') { history.replaceState({}, '', '/'); toast('已使用已绑定身份解锁工作台。'); }
-    if (params.get('identity_linked')) { const provider=params.get('identity_linked'); history.replaceState({}, '', '/'); toast(`${provider} 身份已绑定。`); if (state.status.authenticated) void openSettings('oauth'); }
-    if (params.get('identity_error')) { const reason=params.get('identity_error'); history.replaceState({}, '', '/'); toast(reason==='unbound'?'此身份尚未绑定，仍可使用工作台密码解锁。':'第三方登录未完成；请检查配置或重新尝试。', true); }
+    if (params.get('oauth') === 'connected') { history.replaceState({}, '', '/'); toast(L('邮箱已通过 OAuth 授权并连接。')); }
+    if (params.get('oauth_error')) { history.replaceState({}, '', '/'); toast(`${L('OAuth 连接失败：')}${params.get('oauth_error')}`, true); }
+    if (params.get('identity') === 'connected') { history.replaceState({}, '', '/'); toast(L('已使用已绑定身份解锁工作台。')); }
+    if (params.get('identity_linked')) { const provider=params.get('identity_linked'); history.replaceState({}, '', '/'); toast(`${provider} ${L(' 身份已绑定。')}`); if (state.status.authenticated) void openSettings('oauth'); }
+    if (params.get('identity_error')) { const reason=params.get('identity_error'); history.replaceState({}, '', '/'); toast(reason==='unbound'?L('此身份尚未绑定，仍可使用工作台密码解锁。'):L('第三方登录未完成；请检查配置或重新尝试。'), true); }
   } catch (error) { showAuth(); toast(error.message, true); }
 }
 $('#authForm').addEventListener('submit', async (event) => {
   event.preventDefault();
   const password = $('#authPassword').value;
   const setup = state.status?.setupRequired;
-  const button = $('#authSubmit'); button.disabled = true; button.textContent = setup ? '正在创建…' : '正在解锁…';
+  const button = $('#authSubmit'); button.disabled = true; button.textContent = setup ? L('正在创建…') : L('正在解锁…');
   try {
     await api(setup ? '/api/setup' : '/api/login', { method:'POST', body:JSON.stringify({ password }) });
     $('#authPassword').value = ''; state.status = { ...state.status, setupRequired:false, authenticated:true }; await showApp();
   } catch (error) { toast(error.message, true); }
-  finally { button.disabled = false; button.textContent = setup ? '创建并进入' : '解锁工作台'; }
+  finally { button.disabled = false; button.textContent = setup ? L('创建并进入') : L('解锁工作台'); }
 });
 async function startExternalLogin(provider, flow = 'login') {
   try {
@@ -192,7 +239,7 @@ function renderCustomFolders() {
   const root = $('#customFolderNav'); if (!root) return;
   const knownNames = new Set(['inbox','sent','sent items','已发送','已发邮件','draft','drafts','草稿','archive','all mail','所有邮件','归档','trash','deleted items','deleted messages','已删除','垃圾箱','junk','spam','bulk','垃圾邮件']);
   const items = state.folders.filter((f) => !knownNames.has(String(f.name || f.path).split('/').at(-1).toLowerCase()) && String(f.path).toUpperCase() !== 'INBOX');
-  root.innerHTML = items.length ? `<div class="custom-label">其他文件夹</div>` + items.map((f) => `<button class="nav-item custom-folder-item ${state.folder === f.path && state.accountId === f.accountId ? 'active' : ''}" data-custom-path="${escapeHtml(f.path)}" data-account="${escapeHtml(f.accountId)}" title="${escapeHtml(f.path)}"><span class="nav-icon">▤</span><span class="account-label">${escapeHtml(f.name || f.path)}</span><small class="custom-account-label">${escapeHtml(f.accountEmail)}</small></button>`).join('') : '';
+  root.innerHTML = items.length ? `<div class="custom-label">${L('其他文件夹')}</div>` + items.map((f) => `<button class="nav-item custom-folder-item ${state.folder === f.path && state.accountId === f.accountId ? 'active' : ''}" data-custom-path="${escapeHtml(f.path)}" data-account="${escapeHtml(f.accountId)}" title="${escapeHtml(f.path)}"><span class="nav-icon">▤</span><span class="account-label">${escapeHtml(f.name || f.path)}</span><small class="custom-account-label">${escapeHtml(f.accountEmail)}</small></button>`).join('') : '';
   root.querySelectorAll('[data-custom-path]').forEach((button) => button.addEventListener('click', () => { state.folder=button.dataset.customPath; state.accountId=button.dataset.account; state.cursor=null;state.cursorStack.length=0; state.selected=null; state.detail=null; renderTitles(); renderAccountFilter(); renderAccountNav(); renderCustomFolders(); renderDetailPlaceholder(); loadMessages(); closeSidebar(); }));
 }
 function renderAccountNav() {
@@ -205,13 +252,13 @@ function renderAccountNav() {
 }
 function renderAccountFilter() {
   const select = $('#accountFilter');
-  select.innerHTML = `<option value="all">所有邮箱</option>` + state.accounts.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.label || a.email)}</option>`).join('');
+  select.innerHTML = `<option value="all">${L('所有邮箱')}</option>` + state.accounts.map((a) => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.label || a.email)}</option>`).join('');
   select.value = state.accountId;
 }
 function renderDefaultMailbox() {
   const select = $('#defaultMailboxSelect');
   if (!select) return;
-  select.innerHTML = '<option value="">所有邮箱（不指定默认邮箱）</option>' + state.accounts.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.label || account.email)} · ${escapeHtml(account.email)}</option>`).join('');
+  select.innerHTML = `<option value="">${L('所有邮箱（不指定默认邮箱）')}</option>` + state.accounts.map((account) => `<option value="${escapeHtml(account.id)}">${escapeHtml(account.label || account.email)} · ${escapeHtml(account.email)}</option>`).join('');
   select.value = state.defaultAccountId;
 }
 function renderComposeAccounts(preferred = '') {
@@ -226,14 +273,14 @@ function setFolder(folder) {
   renderTitles(); renderDetailPlaceholder(); loadMessages();
 }
 function renderTitles() {
-  const title = folderTitles[state.folder] || state.folder;
+  const title = L(folderTitles[state.folder] || state.folder);
   $('#currentFolderTitle').textContent = title; $('#listTitle').textContent = title;
 }
 function renderEmpty() {
   const empty = $('#listEmpty');
   const hasAccounts = state.accounts.length > 0;
-  $('#emptyTitle').textContent = hasAccounts ? '这里暂时没有邮件' : '连接你的第一个邮箱';
-  $('#emptyCopy').textContent = hasAccounts ? '试试切换文件夹，或用搜索框查找历史邮件。' : '连接 Gmail、Outlook、Yahoo、163、QQ 或其他 IMAP 邮箱，邮件会实时同步到这里。';
+  $('#emptyTitle').textContent = hasAccounts ? L('这里暂时没有邮件') : L('连接你的第一个邮箱');
+  $('#emptyCopy').textContent = hasAccounts ? L('试试切换文件夹，或用搜索框查找历史邮件。') : L('连接 Gmail、Outlook、Yahoo、163、QQ 或其他 IMAP 邮箱，邮件会实时同步到这里。');
   $('#emptyAddButton').classList.toggle('hidden', hasAccounts);
   empty.classList.remove('hidden'); $('#messageList').innerHTML = '';
 }
@@ -243,10 +290,10 @@ function renderMessageListData(data, source) {
   const total = Number(data?.total);
   state.total = Number.isFinite(total) ? Math.max(0, Math.floor(total)) : state.messages.length;
   if (source === 'cache') {
-    $('#syncBanner').textContent = '显示上次缓存，正在后台刷新…';
+    $('#syncBanner').textContent = L('显示上次缓存，正在后台刷新…');
     $('#syncBanner').classList.remove('hidden');
   } else if (Array.isArray(data?.errors) && data.errors.length) {
-    $('#syncBanner').textContent = data.errors.map((error) => `${state.accounts.find((account) => account.id === error.accountId)?.email || '邮箱'}：${error.error}`).join(' · ');
+    $('#syncBanner').textContent = data.errors.map((error) => `${state.accounts.find((account) => account.id === error.accountId)?.email || L('邮箱')}：${error.error}`).join(' · ');
     $('#syncBanner').classList.remove('hidden');
   } else {
     $('#syncBanner').classList.add('hidden');
@@ -259,7 +306,7 @@ function renderMessageListData(data, source) {
   else { $('#listEmpty').classList.add('hidden'); renderMessages(); }
   const hasPages = state.cursorStack.length > 0 || state.hasMore;
   $('#listPagination').classList.toggle('hidden', !hasPages);
-  $('#pageLabel').textContent = `第 ${state.cursorStack.length + 1} 页`;
+  $('#pageLabel').textContent = I18N_LANG === 'en' ? `Page ${state.cursorStack.length + 1}` : `第 ${state.cursorStack.length + 1} 页`;
   $('#prevPage').disabled = !state.cursorStack.length;
   $('#nextPage').disabled = !state.hasMore;
 }
@@ -285,20 +332,20 @@ async function loadMessages() {
       renderMessageListData(data, source);
     });
     if (!hasCachedList) {
-      list.innerHTML = '<div class="loading"><span class="spinner"></span>正在从邮箱服务器读取…</div>';
+      list.innerHTML = `<div class="loading"><span class="spinner"></span>${L('正在从邮箱服务器读取…')}</div>`;
       $('#listEmpty').classList.add('hidden');
     }
     await refresh;
   } catch (error) {
     if (requestId !== state.mailListRequestId) return;
     if (hasCachedList) {
-      $('#syncBanner').textContent = `邮件列表暂时无法刷新，继续显示上次缓存：${error.message}`;
+      $('#syncBanner').textContent = `${L('邮件列表暂时无法刷新，继续显示上次缓存：')}${error.message}`;
       $('#syncBanner').classList.remove('hidden');
       return;
     }
     state.messages = []; state.total = 0; list.innerHTML = ''; $('#messageCount').textContent = '—';
     $('#listPagination').classList.add('hidden');
-    $('#listEmpty').classList.remove('hidden'); $('#emptyTitle').textContent = '邮件暂时无法读取'; $('#emptyCopy').textContent = error.message; $('#emptyAddButton').classList.toggle('hidden', state.accounts.length > 0);
+    $('#listEmpty').classList.remove('hidden'); $('#emptyTitle').textContent = L('邮件暂时无法读取'); $('#emptyCopy').textContent = error.message; $('#emptyAddButton').classList.toggle('hidden', state.accounts.length > 0);
   }
 }
 function renderMessages() {
@@ -306,15 +353,15 @@ function renderMessages() {
   closeMessageContextMenu();
   const scrollTop = list.scrollTop;
   list.innerHTML = state.messages.map((m, index) => {
-    const sender = m.from?.[0]?.name || m.from?.[0]?.address || '未知发件人';
+    const sender = m.from?.[0]?.name || m.from?.[0]?.address || L('未知发件人');
     const fromEmail = m.from?.[0]?.address || '';
     const account = state.accounts.find((a) => a.id === m.accountId);
     const preview = fromEmail && sender !== fromEmail ? fromEmail : (account && state.accounts.length > 1 ? account.email : '');
     const selected = state.selected && state.selected.uid === m.uid && state.selected.accountId === m.accountId;
-    return `<article class="message-row ${m.unread?'unread':''} ${selected?'selected':''}" data-idx="${index}" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="打开邮件：${escapeHtml(m.subject)}">
+    return `<article class="message-row ${m.unread?'unread':''} ${selected?'selected':''}" data-idx="${index}" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="${L('打开邮件：')}${escapeHtml(m.subject)}">
       <span class="sender-avatar ${colorClass(fromEmail || sender)}">${escapeHtml(initials(sender))}</span>
       <div class="message-content"><div class="message-line"><span class="message-sender">${escapeHtml(sender)}</span><time class="message-time">${escapeHtml(dateShort(m.date))}</time></div>
-      <div class="message-subject">${escapeHtml(m.subject || '(无主题)')}</div><div class="message-preview">${escapeHtml(preview || '点击查看邮件内容')}</div>
+      <div class="message-subject">${escapeHtml(m.subject || L('(无主题)'))}</div><div class="message-preview">${escapeHtml(preview || L('点击查看邮件内容'))}</div>
       <div class="message-foot"><span class="mail-chip">${escapeHtml(account?.label || account?.email || m.accountEmail || '')}</span>${m.flagged?'<span class="star-mark">★</span>':''}</div></div></article>`;
   }).join('');
   $$('.message-row', list).forEach((row) => {
@@ -357,7 +404,7 @@ function ensureMessageContextMenu() {
   menu.id = 'messageContextMenu';
   menu.className = 'mail-context-menu hidden';
   menu.setAttribute('role', 'menu');
-  menu.setAttribute('aria-label', '邮件操作');
+  menu.setAttribute('aria-label', L('邮件操作'));
   menu.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-context-action]');
     if (!button || button.disabled || !openMessageContext) return;
@@ -417,7 +464,7 @@ function openMessageContextMenu(message, trigger, x, y) {
     button.tabIndex = -1;
     button.dataset.contextAction = item.action;
     button.disabled = pendingMessageActions.has(key);
-    button.textContent = item.label;
+    button.textContent = L(item.label);
     menu.append(button);
   });
   menu.style.left = '0px'; menu.style.top = '0px';
@@ -444,13 +491,13 @@ function updateDetailMessageActions(message) {
   const readButton = $('[data-action="read"], [data-action="unread"]', pane);
   if (readButton) {
     const action = message.unread ? 'read' : 'unread';
-    const label = message.unread ? '标为已读' : '标为未读';
+    const label = message.unread ? L('标为已读') : L('标为未读');
     readButton.dataset.action = action; readButton.title = label; readButton.setAttribute('aria-label', label);
   }
   const starButton = $('[data-action="star"], [data-action="unstar"]', pane);
   if (starButton) {
     const action = message.flagged ? 'unstar' : 'star';
-    const label = message.flagged ? '取消星标' : '加星标';
+    const label = message.flagged ? L('取消星标') : L('加星标');
     starButton.dataset.action = action; starButton.title = label; starButton.setAttribute('aria-label', label);
     starButton.textContent = message.flagged ? '★' : '☆';
   }
@@ -495,7 +542,7 @@ async function performMessageAction(action, message) {
 function renderDetailPlaceholder() {
   const pane = $('#detailPane'); pane.classList.remove('mobile-open'); pane.classList.add('empty-detail');
   $('#appView').classList.remove('mobile-reading');
-  pane.innerHTML = '<div class="detail-placeholder"><div class="placeholder-icon">✉</div><h2>选一封邮件开始阅读</h2><p>你的邮件会安全地从对应邮箱实时读取。</p></div>';
+  pane.innerHTML = `<div class="detail-placeholder"><div class="placeholder-icon">✉</div><h2>${L('选一封邮件开始阅读')}</h2><p>${L('你的邮件会安全地从对应邮箱实时读取。')}</p></div>`;
 }
 function addressText(list = []) { return list.map((x) => x.name ? `${x.name} <${x.address}>` : x.address).join(', '); }
 function normalizeClientCid(value = '') {
@@ -509,32 +556,32 @@ async function openMessage(index) {
   const pane = $('#detailPane'); pane.classList.remove('empty-detail'); pane.classList.add('mobile-open');
   $('#appView').classList.add('mobile-reading');
   pane.scrollTop = 0;
-  pane.innerHTML = '<div class="loading"><span class="spinner"></span>正在读取邮件正文…</div>';
+  pane.innerHTML = `<div class="loading"><span class="spinner"></span>${L('正在读取邮件正文…')}</div>`;
   try {
     // attachments=meta：只取附件元数据；附件与超预算的内嵌图按需从附件端点获取
     const params = new URLSearchParams({ folder:message.folder || state.folder, attachments:'meta' });
     const detail = await api(`/api/message/${encodeURIComponent(message.accountId)}/${message.uid}?${params}`);
     state.detail = detail; message.unread = false; renderMessages(); renderDetail(detail, message); updateAIControls();
-  } catch (error) { pane.innerHTML = `<div class="detail-placeholder"><div class="placeholder-icon">!</div><h2>邮件读取失败</h2><p>${escapeHtml(error.message)}</p><button class="button button-quiet detail-back">返回</button></div>`; $('.detail-back', pane)?.addEventListener('click', closeDetailMobile); }
+  } catch (error) { pane.innerHTML = `<div class="detail-placeholder"><div class="placeholder-icon">!</div><h2>${L('邮件读取失败')}</h2><p>${escapeHtml(error.message)}</p><button class="button button-quiet detail-back">${L('返回')}</button></div>`; $('.detail-back', pane)?.addEventListener('click', closeDetailMobile); }
 }
 function renderDetail(detail, message) {
   const account = state.accounts.find((a) => a.id === detail.accountId);
-  const sender = detail.from?.[0]?.name || detail.from?.[0]?.address || '未知发件人';
+  const sender = detail.from?.[0]?.name || detail.from?.[0]?.address || L('未知发件人');
   const to = addressText(detail.to) || detail.email;
   const pane = $('#detailPane'); pane.classList.remove('empty-detail');
   pane.innerHTML = `<article class="detail-view">
-    <div class="detail-toolbar"><button class="icon-button detail-back" data-action="back" aria-label="返回邮件列表" title="返回">←</button><div class="detail-actions">
-      <button class="icon-button" data-action="archive" title="归档" aria-label="归档">▣</button><button class="icon-button" data-action="delete" title="移到已删除" aria-label="移到已删除">⌫</button>
-      <button class="icon-button" data-action="${message.unread?'read':'unread'}" title="${message.unread?'标为已读':'标为未读'}" aria-label="${message.unread?'标为已读':'标为未读'}">◉</button><button class="icon-button" data-action="${message.flagged?'unstar':'star'}" title="${message.flagged?'取消星标':'加星标'}" aria-label="${message.flagged?'取消星标':'加星标'}">${message.flagged?'★':'☆'}</button><button class="icon-button" data-action="translate" title="使用已配置的专用翻译 API 翻译为简体中文" aria-label="翻译为简体中文">译</button>
-    </div><button class="icon-button" data-action="refresh" title="刷新邮件">⟳</button></div>
-    <h1 class="detail-subject">${escapeHtml(detail.subject || '(无主题)')}</h1>
-    <div class="sender-meta"><span class="sender-avatar ${colorClass(detail.from?.[0]?.address || sender)}">${escapeHtml(initials(sender))}</span><div class="sender-info"><div class="sender-info-main"><strong>${escapeHtml(sender)}</strong><span>&lt;${escapeHtml(detail.from?.[0]?.address || '')}&gt;</span></div><div class="sender-detail-line">发给 ${escapeHtml(to)}${detail.cc?.length ? ` · 抄送 ${escapeHtml(addressText(detail.cc))}` : ''}</div></div><time class="detail-date">${escapeHtml(dateLong(detail.date))}</time></div>
+    <div class="detail-toolbar"><button class="icon-button detail-back" data-action="back" aria-label="${L('返回邮件列表')}" title="${L('返回')}">←</button><div class="detail-actions">
+      <button class="icon-button" data-action="archive" title="${L('归档')}" aria-label="${L('归档')}">▣</button><button class="icon-button" data-action="delete" title="${L('移到已删除')}" aria-label="${L('移到已删除')}">⌫</button>
+      <button class="icon-button" data-action="${message.unread?'read':'unread'}" title="${message.unread?L('标为已读'):L('标为未读')}" aria-label="${message.unread?L('标为已读'):L('标为未读')}">◉</button><button class="icon-button" data-action="${message.flagged?'unstar':'star'}" title="${message.flagged?L('取消星标'):L('加星标')}" aria-label="${message.flagged?L('取消星标'):L('加星标')}">${message.flagged?'★':'☆'}</button><button class="icon-button" data-action="translate" title="${L('使用已配置的专用翻译 API 翻译为简体中文')}" aria-label="${L('翻译为简体中文')}">译</button>
+    </div><button class="icon-button" data-action="refresh" title="${L('刷新邮件')}">⟳</button></div>
+    <h1 class="detail-subject">${escapeHtml(detail.subject || L('(无主题)'))}</h1>
+    <div class="sender-meta"><span class="sender-avatar ${colorClass(detail.from?.[0]?.address || sender)}">${escapeHtml(initials(sender))}</span><div class="sender-info"><div class="sender-info-main"><strong>${escapeHtml(sender)}</strong><span>&lt;${escapeHtml(detail.from?.[0]?.address || '')}&gt;</span></div><div class="sender-detail-line">${L('发给 ')}${escapeHtml(to)}${detail.cc?.length ? ` · ${L('抄送 ')}${escapeHtml(addressText(detail.cc))}` : ''}</div></div><time class="detail-date">${escapeHtml(dateLong(detail.date))}</time></div>
     <div class="detail-divider"></div>
     <div class="mail-body" id="mailBody"></div>
-    <section id="mailTranslation" class="mail-translation hidden" aria-live="polite" aria-label="简体中文译文"></section>
+    <section id="mailTranslation" class="mail-translation hidden" aria-live="polite" aria-label="${L('简体中文译文')}"></section>
     ${detail.attachments?.length ? `<div class="attachment-list">${detail.attachments.map((a,i)=>`<a class="attachment-link" download="${escapeHtml(a.filename)}" href="/api/message/${encodeURIComponent(detail.accountId)}/${encodeURIComponent(message.uid)}/attachment/${i}?folder=${encodeURIComponent(message.folder || state.folder)}"><span class="attachment-icon">⌑</span><span>${escapeHtml(a.filename)}<br><small>${escapeHtml(formatSize(a.size))}</small></span></a>`).join('')}</div>`:''}
-    <div class="detail-account-tag"><span class="status-dot"></span>${escapeHtml(account?.label || account?.email || detail.email)} · 原始邮箱</div>
-    <div class="detail-actions-bottom"><button class="button button-primary" data-action="reply">↶ 回复</button></div>
+    <div class="detail-account-tag"><span class="status-dot"></span>${escapeHtml(account?.label || account?.email || detail.email)} · ${L('原始邮箱')}</div>
+    <div class="detail-actions-bottom"><button class="button button-primary" data-action="reply">↶ ${L('回复')}</button></div>
   </article>`;
   const body = $('#mailBody', pane);
   if (detail.html) {
@@ -544,7 +591,7 @@ function renderDetail(detail, message) {
     const remoteImageCount = inertTemplate.content.querySelectorAll('img[data-external-src]').length;
     const frame = document.createElement('iframe');
     frame.className = 'mail-body-frame';
-    frame.title = '邮件正文';
+    frame.title = L('邮件正文');
     frame.setAttribute('sandbox', 'allow-scripts allow-popups allow-popups-to-escape-sandbox');
     frame.referrerPolicy = 'no-referrer';
     frame.height = '320';
@@ -576,13 +623,13 @@ function renderDetail(detail, message) {
     }, { once: true });
     if (remoteImageCount) {
       const notice = document.createElement('div'); notice.className = 'remote-image-notice';
-      const copy = document.createElement('p'); copy.textContent = `此邮件包含 ${remoteImageCount} 张远程图片，默认未加载。加载后，图片来源网站可能获知你的 IP 地址和访问时间。`;
-      const load = document.createElement('button'); load.type = 'button'; load.textContent = '加载外部图片';
+      const copy = document.createElement('p'); copy.textContent = I18N_LANG === 'en' ? `This message contains ${remoteImageCount} remote images, blocked by default. Loading them may reveal your IP address and visit time to the image host.` : `此邮件包含 ${remoteImageCount} 张远程图片，默认未加载。加载后，图片来源网站可能获知你的 IP 地址和访问时间。`;
+      const load = document.createElement('button'); load.type = 'button'; load.textContent = L('加载外部图片');
       load.addEventListener('click', () => { frame.contentWindow?.postMessage({ type: 'load-remote-images' }, '*'); notice.remove(); }, { once:true });
       notice.append(copy, load); body.append(notice);
     }
     body.append(frame);
-  } else { const pre = document.createElement('div'); pre.className='mail-body-text'; pre.textContent = detail.text || '(此邮件没有可显示的正文。)'; body.append(pre); }
+  } else { const pre = document.createElement('div'); pre.className='mail-body-text'; pre.textContent = detail.text || L('(此邮件没有可显示的正文。)'); body.append(pre); }
   $$('[data-action]', pane).forEach((button) => button.addEventListener('click', () => handleDetailAction(button.dataset.action, message, detail)));
 }
 function closeDetailMobile() {
@@ -611,7 +658,7 @@ function mailTextForTranslation(detail) {
 }
 async function translateEmail(detail) {
   const source = mailTextForTranslation(detail);
-  if (!source) { toast('这封邮件没有可翻译的正文。', true); return; }
+  if (!source) { toast(L('这封邮件没有可翻译的正文。'), true); return; }
   if (!state.translationConfig) await loadTranslationConfig();
   if (!state.translationConfig?.configured) {
     await openSettings('translation');
@@ -627,28 +674,29 @@ async function translateEmail(detail) {
   if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
   const showResult = (text, isError = false) => {
     panel.classList.remove('hidden'); panel.classList.toggle('error', isError); panel.replaceChildren();
-    const heading = document.createElement('strong'); heading.className = 'mail-translation-heading'; heading.textContent = '简体中文译文';
+    const heading = document.createElement('strong'); heading.className = 'mail-translation-heading'; heading.textContent = L('简体中文译文');
     const body = document.createElement('div'); body.className = 'mail-translation-content'; body.textContent = text;
     panel.append(heading, body); return body;
   };
   button.disabled = true; button.setAttribute('aria-busy', 'true');
-  showResult('正在翻译…');
+  showResult(L('正在翻译…'));
   try {
     const result = await api('/api/translation/translate', { method:'POST', body:JSON.stringify({ text }) });
     const translation = normalizeTranslationSpacing(result.translation);
-    if (!translation) throw new Error('翻译服务没有返回译文。');
+    if (!translation) throw new Error(L('翻译服务没有返回译文。'));
     const body = showResult(translation);
     const note = document.createElement('small'); note.className = 'mail-translation-note';
-    const providerName = ({niutrans:'小牛翻译',google:'Google Cloud Translation',azure:'Azure Translator'})[result.provider] || '专用翻译 API';
-    note.textContent = `${truncated ? '邮件较长，本次仅发送前 12,000 个字符；' : ''}由${providerName}生成，请核对译文中的日期、金额和专有名词。`;
+  const providerName = ({niutrans:L('小牛翻译'),google:'Google Cloud Translation',azure:'Azure Translator'})[result.provider] || L('专用翻译 API');
+  note.textContent = `${truncated ? L('邮件较长，本次仅发送前 12,000 个字符；') : ''}${L('由')}${providerName}${L('，请核对译文中的日期、金额和专有名词。')}`;
     panel.append(note);
   } catch (error) { showResult(error.message || '翻译失败，请稍后重试。', true); }
   finally { button.disabled = false; button.removeAttribute('aria-busy'); }
 }
 function openCompose(options = {}) {
   if (!state.accounts.length) { toast('请先连接一个邮箱账户。', true); return openAccountDialog(); }
-  $('#composeForm').reset(); $('#composeError').classList.add('hidden'); $('#composeTitle').textContent = options.to ? '回复邮件' : '新邮件';
+  $('#composeForm').reset(); $('#composeError').classList.add('hidden'); $('#composeTitle').textContent = options.to ? L('回复邮件') : L('新邮件');
   composeReplyMeta = options.to ? { accountId: options.accountId || '', inReplyTo: options.inReplyTo || '', references: options.references || '' } : null;
+  composeIsReply = Boolean(options.to);
   composeFiles = []; renderComposeFiles();
   renderComposeAccounts(options.accountId || '');
   $('#composeTo').value = options.to || ''; $('#composeSubject').value = options.subject || '';
@@ -659,17 +707,17 @@ function openCompose(options = {}) {
 $('#composeButton').addEventListener('click', () => openCompose());
 $('#composeForm').addEventListener('submit', async (event) => {
   event.preventDefault(); $('#composeError').classList.add('hidden');
-  const button = $('#sendButton'); button.disabled = true; button.innerHTML = '<span class="spinner"></span>正在发送…';
+  const button = $('#sendButton'); button.disabled = true; button.innerHTML = `<span class="spinner"></span>${L('正在发送…')}`;
   const detail = state.detail;
   const payload = { accountId:$('#composeFrom').value, to:$('#composeTo').value, cc:$('#composeCc').value, subject:$('#composeSubject').value, text:$('#composeBody').value, attachments:composeFiles };
-  if ($('#composeTitle').textContent === '回复邮件' && composeReplyMeta) { payload.inReplyTo = composeReplyMeta.inReplyTo; payload.references = composeReplyMeta.references; }
-  else if (detail && $('#composeTitle').textContent === '回复邮件') { payload.inReplyTo = detail.messageId || detail.inReplyTo; payload.references = [detail.references, detail.messageId].filter(Boolean).join(' '); }
+  if (composeIsReply && composeReplyMeta) { payload.inReplyTo = composeReplyMeta.inReplyTo; payload.references = composeReplyMeta.references; }
+  else if (detail && composeIsReply) { payload.inReplyTo = detail.messageId || detail.inReplyTo; payload.references = [detail.references, detail.messageId].filter(Boolean).join(' '); }
   try {
     const result = await api('/api/send', { method:'POST', body:JSON.stringify(payload) });
     $('#composeDialog').close(); toast(result.warning || result.message || '邮件已发送。', Boolean(result.warning)); composeFiles = []; renderComposeFiles();
     if (state.folder === 'Sent') await loadMessages();
   } catch (error) { $('#composeError').textContent = error.message; $('#composeError').classList.remove('hidden'); }
-  finally { button.disabled = false; button.innerHTML = '<span>发送邮件</span><span>↗</span>'; }
+  finally { button.disabled = false; button.innerHTML = `<span>${L('发送邮件')}</span><span>↗</span>`; }
 });
 $('#composeMinimize').addEventListener('click', () => $('#composeDialog').close());
 $('#composeFiles').addEventListener('change', async (event) => {
@@ -686,7 +734,7 @@ $('#composeFiles').addEventListener('change', async (event) => {
 });
 function renderComposeFiles() {
   const root = $('#composeFileList'); if (!root) return;
-  root.innerHTML = composeFiles.map((file,index) => `<span class="attachment-token"><span class="attachment-paper">▤</span><span class="attachment-token-name">${escapeHtml(file.filename)}</span><small>${escapeHtml(formatSize(file.size))}</small><button type="button" data-remove-attachment="${index}" title="移除附件" aria-label="移除 ${escapeHtml(file.filename)}">×</button></span>`).join('');
+  root.innerHTML = composeFiles.map((file,index) => `<span class="attachment-token"><span class="attachment-paper">▤</span><span class="attachment-token-name">${escapeHtml(file.filename)}</span><small>${escapeHtml(formatSize(file.size))}</small><button type="button" data-remove-attachment="${index}" title="${L('移除附件')}" aria-label="${L('移除 ')}${escapeHtml(file.filename)}">×</button></span>`).join('');
   root.querySelectorAll('[data-remove-attachment]').forEach((button) => button.addEventListener('click', () => { composeFiles.splice(Number(button.dataset.removeAttachment),1); renderComposeFiles(); }));
 }
 
@@ -733,13 +781,13 @@ $('#accountForm').elements.email.addEventListener('blur', () => { const form=$('
 $('#accountForm').addEventListener('submit', async (event) => {
   event.preventDefault(); const form = event.currentTarget; const values = Object.fromEntries(new FormData(form));
   values.imapSecure=form.elements.imapSecure.checked; values.smtpSecure=form.elements.smtpSecure.checked;
-  $('#accountFormError').classList.add('hidden'); const button=$('#connectSubmit'); button.disabled=true; button.innerHTML='<span class="spinner"></span>正在验证连接…';
+  $('#accountFormError').classList.add('hidden'); const button=$('#connectSubmit'); button.disabled=true; button.innerHTML=`<span class="spinner"></span>${L('正在验证连接…')}`;
   try {
     const data=await api('/api/accounts',{method:'POST',body:JSON.stringify(values)});
     $('#accountDialog').close(); toast(data.message || '邮箱已连接。'); await loadAccounts(); await loadFolders();
     state.accountId=data.account.id; renderAccountNav(); renderAccountFilter(); renderComposeAccounts(); await loadMessages();
   } catch(error) { $('#accountFormError').textContent=error.message; $('#accountFormError').classList.remove('hidden'); }
-  finally { button.disabled=false; button.innerHTML='<span>验证并连接</span><span class="button-arrow">→</span>'; }
+  finally { button.disabled=false; button.innerHTML=`<span>${L('验证并连接')}</span><span class="button-arrow">→</span>`; }
 });
 async function startOAuth(provider) {
   try { const data=await api(`/api/oauth/${provider}/start`); location.href=data.url; }
@@ -776,7 +824,7 @@ $('#manageAccountsButton').addEventListener('click', () => { void openSettings('
 $('#settingsAddButton').addEventListener('click',()=>{ $('#settingsDialog').close(); openAccountDialog(); });
 $('#saveDefaultMailbox').addEventListener('click', async () => {
   const button = $('#saveDefaultMailbox'); const status = $('#defaultMailboxStatus');
-  button.disabled = true; status.textContent = '正在保存…'; status.classList.remove('error');
+  button.disabled = true; status.textContent = L('正在保存…'); status.classList.remove('error');
   try {
     const result = await api('/api/preferences/default-account', { method:'PUT', body:JSON.stringify({ accountId:$('#defaultMailboxSelect').value }) });
     state.defaultAccountId = result.defaultAccountId || '';
@@ -785,19 +833,19 @@ $('#saveDefaultMailbox').addEventListener('click', async () => {
       state.accountId = state.defaultAccountId || 'all'; state.cursor = null; state.cursorStack.length = 0; state.selected = null; state.detail = null;
       renderAccountNav(); renderAccountFilter(); renderDetailPlaceholder(); await loadMessages();
     }
-    renderDefaultMailbox(); status.textContent = state.defaultAccountId ? '已保存；刷新或重新进入时会默认显示此邮箱的收件箱。' : '已清除默认邮箱设置。';
-  } catch (error) { status.textContent = error.message; status.classList.add('error'); }
+    renderDefaultMailbox(); status.textContent = state.defaultAccountId ? L('已保存；刷新或重新进入时会默认显示此邮箱的收件箱。') : L('已清除默认邮箱设置。');
+  } catch (error) { status.textContent = L(error.message); status.classList.add('error'); }
   finally { button.disabled = false; }
 });
 async function renderManagedAccounts() {
   const root=$('#managedAccounts');
-  if(!state.accounts.length){ root.innerHTML='<div class="settings-empty">尚未连接邮箱账户。</div>';return; }
+  if(!state.accounts.length){ root.innerHTML=`<div class="settings-empty">${L('尚未连接邮箱账户。')}</div>`;return; }
   root.innerHTML=state.accounts.map(a=>{
     const status=a.mailStatus||{};
-    const idleLabel=({connected:'已连接',connecting:'连接中',reconnecting:'重连中',disabled:'未启用'})[status.idleStatus]||'状态未知';
-    const lastSync=status.lastSyncAt?dateLong(status.lastSyncAt):'尚无成功同步';
-    const reconnectError=status.reconnectError?`<span class="managed-sync-error">重连错误：${escapeHtml(status.reconnectError)}</span>`:'';
-    return `<div class="managed-account">${accountProviderIcon(a)}<div class="managed-main"><strong>${escapeHtml(a.label||a.email)}</strong><span>${escapeHtml(a.email)} · ${a.authType==='oauth'?'OAuth 安全授权':'IMAP / SMTP'}</span><span class="managed-sync-info">IMAP / IDLE：${idleLabel} · 最近成功同步：${escapeHtml(lastSync)}${status.reconnectAttempts?` · 重连 ${Number(status.reconnectAttempts)} 次`:''}</span>${reconnectError}</div><span class="managed-badge">已连接</span><button class="remove-account" data-remove="${escapeHtml(a.id)}" title="移除此账户" aria-label="移除此账户">×</button></div>`;
+    const idleLabel=L((({connected:'已连接',connecting:'连接中',reconnecting:'重连中',disabled:'未启用'})[status.idleStatus])||'状态未知');
+    const lastSync=status.lastSyncAt?dateLong(status.lastSyncAt):L('尚无成功同步');
+    const reconnectError=status.reconnectError?`<span class="managed-sync-error">${L('重连错误：')}${escapeHtml(status.reconnectError)}</span>`:'';
+    return `<div class="managed-account">${accountProviderIcon(a)}<div class="managed-main"><strong>${escapeHtml(a.label||a.email)}</strong><span>${escapeHtml(a.email)} · ${a.authType==='oauth'?L('OAuth 安全授权'):'IMAP / SMTP'}</span><span class="managed-sync-info">IMAP / IDLE：${idleLabel} · ${L('最近成功同步：')}${escapeHtml(lastSync)}${status.reconnectAttempts?` · ${L(' · 重连 ')}${Number(status.reconnectAttempts)}${L(' 次')}`:''}</span>${reconnectError}</div><span class="managed-badge">${L('已连接')}</span><button class="remove-account" data-remove="${escapeHtml(a.id)}" title="${L('移除此账户')}" aria-label="${L('移除此账户')}">×</button></div>`;
   }).join('');
   $$('[data-remove]',root).forEach(button=>button.addEventListener('click',async()=>{
     const account=state.accounts.find(a=>a.id===button.dataset.remove); if(!account)return;
@@ -808,7 +856,7 @@ async function renderManagedAccounts() {
 }
 let confirmResolver;
 function askConfirm(title,copy,acceptLabel='确认',danger=false){
-  $('#confirmTitle').textContent=title;$('#confirmCopy').textContent=copy;$('#confirmAccept').textContent=acceptLabel;$('#confirmAccept').classList.toggle('button-danger',danger);$('#confirmAccept').classList.toggle('button-primary',!danger);
+  $('#confirmTitle').textContent=L(title);$('#confirmCopy').textContent=L(copy);$('#confirmAccept').textContent=L(acceptLabel);$('#confirmAccept').classList.toggle('button-danger',danger);$('#confirmAccept').classList.toggle('button-primary',!danger);
   $('#confirmDialog').showModal(); return new Promise(resolve=>{confirmResolver=resolve;});
 }
 $('#confirmCancel').addEventListener('click',()=>{if(confirmResolver)confirmResolver(false);confirmResolver=null;$('#confirmDialog').close();});
@@ -816,7 +864,7 @@ $('#confirmAccept').addEventListener('click',()=>{if(confirmResolver)confirmReso
 $('#confirmDialog').addEventListener('close',()=>{if(confirmResolver)confirmResolver(false);confirmResolver=null;});
 function backupStatus(message, isError = false) {
   const status = $('#backupSettingsStatus');
-  status.textContent = message; status.classList.toggle('error', isError);
+  status.textContent = L(message); status.classList.toggle('error', isError);
 }
 $('#backupEncryptEnabled').addEventListener('change', (event) => {
   const enabled = event.currentTarget.checked;
@@ -867,7 +915,7 @@ $('#backupRestoreFile').addEventListener('change', async (event) => {
     encrypted = new TextDecoder().decode(prefix).startsWith('YOUHUI-MAIL-ENCRYPTED-BACKUP\n');
   } catch { backupStatus('无法读取备份文件头。', true); input.value=''; return; }
   if (encrypted) {
-    const entered = window.prompt('此备份已加密。请输入创建备份时设置的密码（至少 12 个字符）。');
+    const entered = window.prompt(I18N_LANG === 'en' ? 'This backup is encrypted. Enter the passphrase set when it was created (at least 12 characters).' : '此备份已加密。请输入创建备份时设置的密码（至少 12 个字符）。');
     if (entered === null) { input.value=''; return; }
     passphrase = entered;
     if (passphrase.length < 12 || passphrase.length > 1024) { backupStatus('备份密码须为 12 到 1024 个字符。', true); input.value=''; return; }
@@ -955,9 +1003,9 @@ function selectedMcpAccountScope(row) {
   return ids;
 }
 function describeMcpAccountScope(scope) {
-  if (scope === 'all') return '全部已连接邮箱';
+  if (scope === 'all') return L('全部已连接邮箱');
   const accounts = state.mcpConfig?.accounts || [];
-  return scope.map((id) => accounts.find((account) => String(account.id) === String(id))?.email || accounts.find((account) => String(account.id) === String(id))?.label || '已选邮箱').join('、');
+  return scope.map((id) => accounts.find((account) => String(account.id) === String(id))?.email || accounts.find((account) => String(account.id) === String(id))?.label || L('已选邮箱')).join('、');
 }
 function renderMcpPermissions() {
   const root = $('#mcpPermissionRows');
@@ -968,12 +1016,12 @@ function renderMcpPermissions() {
     const configured = Boolean(config.configured);
     const allAccounts = config.accountScope !== 'selected';
     const selectedIds = Array.isArray(config.accountIds) ? config.accountIds.map(String) : [];
-    const status = config.legacy ? '旧令牌（已降为只读）' : configured ? `已启用 · ${allAccounts ? '全部邮箱' : `${selectedIds.length} 个邮箱`}` : '尚未创建';
+    const status = config.legacy ? L('旧令牌（已降为只读）') : configured ? (allAccounts ? `${L('已启用 · ')}${L('全部已连接邮箱')}` : `${L('已启用 · ')}${selectedIds.length}${L(' 个邮箱')}`) : L('尚未创建');
     const accountOptions = accounts.length ? accounts.map((account) => {
       const id = escapeHtml(account.id);
       return `<label class="mcp-scope-account"><input type="checkbox" data-mcp-scope-account value="${id}" ${!allAccounts && selectedIds.includes(String(account.id)) ? 'checked' : ''}><span>${escapeHtml(account.label || account.email || account.id)}<small>${escapeHtml(account.email || '')}</small></span></label>`;
     }).join('') : '<small class="mcp-scope-empty">尚未连接邮箱；选择“全部”可包含以后添加的邮箱。</small>';
-    return `<article class="mcp-permission-row" data-permission-row="${item.id}"><div class="mcp-permission-info"><strong>${item.label}</strong><span>${item.description}</span><small>${status}</small></div><fieldset class="mcp-scope-fieldset"><legend>允许访问的邮箱</legend><label class="mcp-scope-all"><input type="checkbox" data-mcp-scope-all ${allAccounts ? 'checked' : ''}><span>全部已连接邮箱</span></label><div class="mcp-scope-accounts">${accountOptions}</div></fieldset><div class="mcp-permission-actions"><button class="button button-quiet" type="button" data-mcp-token-action="create" data-permission="${item.id}">${configured?'轮换令牌':'创建令牌'}</button>${configured?`<button class="button button-quiet" type="button" data-mcp-token-action="save-scope" data-permission="${item.id}">保存范围</button><button class="button button-quiet mcp-revoke-button" type="button" data-mcp-token-action="revoke" data-permission="${item.id}">撤销</button>`:''}</div></article>`;
+    return `<article class="mcp-permission-row" data-permission-row="${item.id}"><div class="mcp-permission-info"><strong>${L(item.label)}</strong><span>${L(item.description)}</span><small>${status}</small></div><fieldset class="mcp-scope-fieldset"><legend>${L('允许访问的邮箱')}</legend><label class="mcp-scope-all"><input type="checkbox" data-mcp-scope-all ${allAccounts ? 'checked' : ''}><span>${L('全部已连接邮箱')}</span></label><div class="mcp-scope-accounts">${accountOptions}</div></fieldset><div class="mcp-permission-actions"><button class="button button-quiet" type="button" data-mcp-token-action="create" data-permission="${item.id}">${configured?L('轮换令牌'):L('创建令牌')}</button>${configured?`<button class="button button-quiet" type="button" data-mcp-token-action="save-scope" data-permission="${item.id}">${L('保存范围')}</button><button class="button button-quiet mcp-revoke-button" type="button" data-mcp-token-action="revoke" data-permission="${item.id}">${L('撤销')}</button>`:''}</div></article>`;
   }).join('');
 }
 async function loadMcpConfig() {
@@ -987,7 +1035,7 @@ async function loadMcpConfig() {
     await pollMcpApprovals();
   } catch (error) {
     state.mcpConfig = null;
-    $('#mcpEndpoint').textContent = '无法读取 MCP 配置';
+    $('#mcpEndpoint').textContent = L('无法读取 MCP 配置');
     $('#mcpSettingsStatus').textContent = error.message;
     $('#mcpSettingsStatus').classList.add('error');
   }
@@ -1012,12 +1060,12 @@ $('#mcpPermissionRows').addEventListener('click', async (event) => {
   let accountIds;
   if (action === 'create' || action === 'save-scope') {
     try { accountIds = selectedMcpAccountScope(row); }
-    catch (error) { const status = $('#mcpSettingsStatus'); status.textContent = error.message; status.classList.add('error'); return; }
+    catch (error) { const status = $('#mcpSettingsStatus'); status.textContent = L(error.message); status.classList.add('error'); return; }
   }
   if (action === 'create' && configured && !await askConfirm('轮换此 MCP 令牌？', `现有令牌会立即失效；新令牌只可访问：${describeMcpAccountScope(accountIds)}。已连接的 Agent 需要更新。`, '轮换令牌', true)) return;
   if (action === 'revoke' && !await askConfirm('撤销此 MCP 令牌？', '使用此令牌的 Agent 会立即失去对应权限；其他权限的令牌不受影响。', '撤销令牌', true)) return;
   button.disabled = true;
-  const status = $('#mcpSettingsStatus'); status.textContent = action === 'create' ? '正在创建或轮换令牌…' : action === 'save-scope' ? '正在保存邮箱范围…' : '正在撤销令牌…'; status.classList.remove('error');
+    const status = $('#mcpSettingsStatus'); status.textContent = action === 'create' ? L('正在创建或轮换令牌…') : action === 'save-scope' ? L('正在保存邮箱范围…') : L('正在撤销令牌…'); status.classList.remove('error');
   try {
     if (action === 'create') {
       const result = await api('/api/mcp/token', { method:'POST', body:JSON.stringify({ permission, accountIds }) });
@@ -1025,21 +1073,21 @@ $('#mcpPermissionRows').addEventListener('click', async (event) => {
       state.mcpConfig.permissions[permission] = { ...state.mcpConfig.permissions?.[permission], configured:true, legacy:false, accountScope:accountIds === 'all' ? 'all' : 'selected', accountIds:accountIds === 'all' ? [] : accountIds };
       renderMcpPermissions();
       $('#mcpTokenValue').value = result.token;
-      $('#mcpTokenScope').textContent = `${mcpPermissionDefinitions.find((item)=>item.id===permission)?.label || 'MCP'}新令牌`;
+      $('#mcpTokenScope').textContent = `${L(mcpPermissionDefinitions.find((item)=>item.id===permission)?.label || 'MCP')}${L('新令牌')}`;
       $('#mcpTokenReveal').classList.remove('hidden'); mcpTokenRevealPermission = permission;
-      status.textContent = '令牌仅显示这一次；请复制到可信任的 Agent 配置中。关闭设置后无法再次查看。';
+      status.textContent = L('令牌仅显示这一次；请复制到可信任的 Agent 配置中。关闭设置后无法再次查看。');
     } else if (action === 'save-scope') {
       const result = await api(`/api/mcp/token/${encodeURIComponent(permission)}/scope`, { method:'POST', body:JSON.stringify({ accountIds }) });
       state.mcpConfig.permissions[permission] = { ...state.mcpConfig.permissions[permission], ...result };
       renderMcpPermissions();
-      status.textContent = `已保存范围：${describeMcpAccountScope(accountIds)}。`;
+      status.textContent = `${L('已保存范围：')}${describeMcpAccountScope(accountIds)}${L('。')}`;
     } else if (action === 'revoke') {
       await api(`/api/mcp/token/${encodeURIComponent(permission)}`, { method:'DELETE' });
       state.mcpConfig.permissions[permission] = { configured:false, legacy:false, accountScope:'all', accountIds:[] };
       if (mcpTokenRevealPermission === permission) clearMcpTokenReveal();
-      renderMcpPermissions(); status.textContent = '此权限令牌已撤销。';
+      renderMcpPermissions(); status.textContent = L('此权限令牌已撤销。');
     }
-  } catch (error) { status.textContent = error.message; status.classList.add('error'); }
+  } catch (error) { status.textContent = L(error.message); status.classList.add('error'); }
   finally { button.disabled = false; }
 });
 $('#copyMcpToken').addEventListener('click', async () => {
@@ -1047,11 +1095,11 @@ $('#copyMcpToken').addEventListener('click', async () => {
   if (!token) return;
   try {
     await navigator.clipboard.writeText(token);
-    $('#mcpSettingsStatus').textContent = '令牌已复制。请只粘贴到可信任的 MCP Agent 配置中。';
+    $('#mcpSettingsStatus').textContent = L('令牌已复制。请只粘贴到可信任的 MCP Agent 配置中。');
     $('#mcpSettingsStatus').classList.remove('error');
   } catch {
     $('#mcpTokenValue').focus(); $('#mcpTokenValue').select();
-    $('#mcpSettingsStatus').textContent = '无法自动复制；已选中令牌，请使用设备的复制操作。';
+    $('#mcpSettingsStatus').textContent = L('无法自动复制；已选中令牌，请使用设备的复制操作。');
     $('#mcpSettingsStatus').classList.remove('error');
   }
 });
@@ -1060,16 +1108,16 @@ function renderMcpApprovals() {
   const banner = $('#mcpApprovalBanner');
   const list = Array.isArray(mcpApprovals) ? mcpApprovals : [];
   banner.classList.toggle('hidden', list.length === 0 || $('#appView').classList.contains('hidden'));
-  $('#mcpApprovalBannerText').textContent = list.length ? `有 ${list.length} 项待确认的 MCP 邮件操作` : '有待确认的 MCP 邮件操作';
-  if (!list.length) { root.innerHTML = '<div class="settings-empty">目前没有待确认操作。</div>'; return; }
+  $('#mcpApprovalBannerText').textContent = list.length ? (I18N_LANG === 'en' ? `${list.length} MCP mail actions awaiting confirmation` : `有 ${list.length} 项待确认的 MCP 邮件操作`) : L('有待确认的 MCP 邮件操作');
+  if (!list.length) { root.innerHTML = `<div class="settings-empty">${L('目前没有待确认操作。')}</div>`; return; }
   root.innerHTML = list.map((item) => {
     const send = item.kind === 'send_email';
-    const title = send ? `待发送：${item.subject || '(无主题)'}` : '待移入已删除';
+    const title = send ? `${L('待发送：')}${item.subject || L('(无主题)')}` : L('待移入已删除');
     const details = send
-      ? `<div class="mcp-approval-address"><strong>收件人：</strong>${escapeHtml(item.to || '')}${item.cc?`<br><strong>抄送：</strong>${escapeHtml(item.cc)}`:''}${item.bcc?`<br><strong>密送：</strong>${escapeHtml(item.bcc)}`:''}</div><pre class="mcp-approval-preview">${escapeHtml(item.text || '(无正文)')}</pre>`
+      ? `<div class="mcp-approval-address"><strong>${L('收件人：')}</strong>${escapeHtml(item.to || '')}${item.cc?`<br><strong>${L('抄送：')}</strong>${escapeHtml(item.cc)}`:''}${item.bcc?`<br><strong>${L('密送：')}</strong>${escapeHtml(item.bcc)}`:''}</div><pre class="mcp-approval-preview">${escapeHtml(item.text || L('(无正文)'))}</pre>`
       : `<div class="mcp-approval-address">${escapeHtml(item.accountEmail || '')} · ${escapeHtml(item.folder || 'INBOX')} · UID ${Number(item.uid) || ''}</div>`;
     const date = item.createdAt ? dateLong(item.createdAt) : '';
-    return `<article class="mcp-approval-card"><div class="mcp-approval-head"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(item.accountLabel || item.accountEmail || '')}${date?` · ${escapeHtml(date)}`:''}</small></div>${details}<div class="mcp-approval-actions"><button class="button button-primary" type="button" data-mcp-approval-action="approve" data-approval-id="${escapeHtml(item.id)}">${send?'确认并发送':'确认移入已删除'}</button><button class="button button-quiet" type="button" data-mcp-approval-action="deny" data-approval-id="${escapeHtml(item.id)}">拒绝</button></div></article>`;
+    return `<article class="mcp-approval-card"><div class="mcp-approval-head"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(item.accountLabel || item.accountEmail || '')}${date?` · ${escapeHtml(date)}`:''}</small></div>${details}<div class="mcp-approval-actions"><button class="button button-primary" type="button" data-mcp-approval-action="approve" data-approval-id="${escapeHtml(item.id)}">${send?L('确认并发送'):L('确认移入已删除')}</button><button class="button button-quiet" type="button" data-mcp-approval-action="deny" data-approval-id="${escapeHtml(item.id)}">${L('拒绝')}</button></div></article>`;
   }).join('');
 }
 async function pollMcpApprovals() {
@@ -1098,18 +1146,18 @@ $('#mcpApprovalList').addEventListener('click', async (event) => {
   const send = approval.kind === 'send_email';
   if (button.dataset.mcpApprovalAction === 'approve') {
     const copy = send
-      ? `将从 ${approval.accountEmail || approval.accountLabel || '所选邮箱'} 发送给 ${approval.to || '未指定收件人'}。主题：${approval.subject || '(无主题)'}。\n\n${String(approval.text || '').slice(0,4000)}`
-      : `将把 ${approval.accountEmail || approval.accountLabel || '所选邮箱'} 中 ${approval.folder || 'INBOX'} 的邮件 UID ${approval.uid} 移入“已删除”。这不是永久删除。`;
-    if (!await askConfirm(send?'确认发送这封邮件？':'确认移入已删除？', copy, send?'确认并发送':'移入已删除', true)) return;
+      ? `${L('将从 ')}${approval.accountEmail || approval.accountLabel || L('所选邮箱')}${L(' 发送给 ')}${approval.to || L('未指定收件人')}。${L('主题：')}${approval.subject || L('(无主题)')}。\n\n${String(approval.text || '').slice(0,4000)}`
+      : (I18N_LANG === 'en' ? `Move UID ${approval.uid} in ${approval.folder || 'INBOX'} of ${approval.accountEmail || approval.accountLabel || L('所选邮箱')} to Trash. This is not a permanent deletion.` : `将把 ${approval.accountEmail || approval.accountLabel || '所选邮箱'} 中 ${approval.folder || 'INBOX'} 的邮件 UID ${approval.uid} 移入“已删除”。这不是永久删除。`);
+    if (!await askConfirm(send?L('确认发送这封邮件？'):L('确认移入已删除？'), copy, send?L('确认并发送'):L('移入已删除'), true)) return;
   }
   button.disabled = true;
   try {
     if (button.dataset.mcpApprovalAction === 'approve') {
       const result = await api(`/api/mcp/approvals/${encodeURIComponent(id)}/approve`, { method:'POST', body:JSON.stringify({}) });
-      toast(send ? (result.result?.warning || result.result?.message || '邮件已发送。') : '邮件已移入已删除。', Boolean(result.result?.warning));
+      toast(send ? (result.result?.warning || result.result?.message || L('邮件已发送。')) : L('邮件已移入已删除。'), Boolean(result.result?.warning));
     } else {
       await api(`/api/mcp/approvals/${encodeURIComponent(id)}/deny`, { method:'POST', body:JSON.stringify({}) });
-      toast('已拒绝此 MCP 操作。');
+      toast(L('已拒绝此 MCP 操作。'));
     }
     await pollMcpApprovals();
   } catch (error) { toast(error.message, true); await pollMcpApprovals(); }
@@ -1134,7 +1182,7 @@ function fillOAuthSettingsForm() {
   };
   for (const [id, configured] of Object.entries(inputStatus)) {
     const input = $(`#${id}`); input.value = '';
-    input.placeholder = configured ? '已配置；留空保留已保存值' : (id.includes('Secret') ? '输入客户端密钥' : id.includes('ConfigurationUrl') ? '粘贴 Cloudflare Access 配置端点' : '输入客户端 ID');
+    input.placeholder = configured ? L('已配置；留空保留已保存值') : (id.includes('Secret') ? L('输入客户端密钥') : id.includes('ConfigurationUrl') ? L('粘贴 Cloudflare Access 配置端点') : L('输入客户端 ID'));
   }
   const callbacks = {
     mailGoogleCallback: config.mailbox.google.callbackUrl,
@@ -1148,10 +1196,10 @@ function fillOAuthSettingsForm() {
   for (const [provider, id] of Object.entries(identityStatus)) {
     const item = config.login[provider];
     const status = $(`#${id}`);
-    status.textContent = item.bound ? `已绑定${item.label ? ` · ${item.label}` : ''}${item.email ? ` (${item.email})` : ''}` : '未绑定';
+    status.textContent = item.bound ? (I18N_LANG === 'en' ? `Linked${item.label ? ` · ${item.label}` : ''}${item.email ? ` (${item.email})` : ''}` : `已绑定${item.label ? ` · ${item.label}` : ''}${item.email ? ` (${item.email})` : ''}`) : L('未绑定');
     const bind = $(`[data-bind-identity="${provider}"]`);
     const unbind = $(`[data-unbind-identity="${provider}"]`);
-    bind.disabled = !item.configured; bind.textContent = item.bound ? '重新绑定' : '绑定';
+    bind.disabled = !item.configured; bind.textContent = item.bound ? L('重新绑定') : L('绑定');
     unbind.disabled = !item.bound;
   }
   $('#oauthSettingsStatus').textContent = '';
@@ -1161,14 +1209,14 @@ function updateNotificationScopeNote() {
   const note = $('#notificationScopeNote'); if (!note) return;
   const account = state.accounts.find((item) => item.id === state.defaultAccountId);
   note.textContent = account
-    ? `当前通知范围：只检查默认邮箱“${account.label || account.email}”；更改默认邮箱后按新账户检查。`
-    : '当前通知范围：所有已连接邮箱；设置默认邮箱后只检查该账户。';
+    ? (I18N_LANG === 'en' ? `Notification scope: only the default mailbox “${account.label || account.email}” is checked; change the default mailbox to switch.` : `当前通知范围：只检查默认邮箱“${account.label || account.email}”；更改默认邮箱后按新账户检查。`)
+    : L('当前通知范围：所有已连接邮箱；设置默认邮箱后只检查该账户。');
 }
 function notificationPermissionText() {
-  if (!('Notification' in window)) return '此浏览器不支持系统通知。';
-  if (Notification.permission === 'granted') return '浏览器通知已允许；工作台不在前台时会显示系统通知。';
-  if (Notification.permission === 'denied') return '浏览器通知已被拒绝；请在浏览器站点设置中改为允许。';
-  return '尚未授权；点击右侧按钮后，浏览器会询问是否允许通知。';
+  if (!('Notification' in window)) return L('此浏览器不支持系统通知。');
+  if (Notification.permission === 'granted') return L('浏览器通知已允许；工作台不在前台时会显示系统通知。');
+  if (Notification.permission === 'denied') return L('浏览器通知已被拒绝；请在浏览器站点设置中改为允许。');
+  return L('尚未授权；点击右侧按钮后，浏览器会询问是否允许通知。');
 }
 function fillNotificationSettingsForm() {
   const config = state.notificationConfig || { enabled:true, intervalSeconds:120, webhookEnabled:false, webhookConfigured:false, webhookSecretConfigured:false };
@@ -1178,19 +1226,19 @@ function fillNotificationSettingsForm() {
   $('#webhookEnabled').checked = Boolean(config.webhookEnabled);
   $('#wxpusherEnabled').checked = Boolean(config.wxpusherEnabled);
   $('#webhookUrl').value = '';
-  $('#webhookUrl').placeholder = config.webhookConfigured ? '已保存；留空保留，填写新地址可替换' : 'https://hooks.example.com/your-endpoint';
+  $('#webhookUrl').placeholder = config.webhookConfigured ? L('已保存；留空保留，填写新地址可替换') : 'https://hooks.example.com/your-endpoint';
   $('#webhookSecret').value = '';
-  $('#webhookSecret').placeholder = config.webhookSecretConfigured ? '已保存；留空保留，输入新密钥可替换' : '输入可选的签名密钥';
+  $('#webhookSecret').placeholder = config.webhookSecretConfigured ? L('已保存；留空保留，输入新密钥可替换') : L('输入可选的签名密钥');
   const appTokenConfigured = Boolean(config.wxpusherAppTokenConfigured);
   $('#wxpusherAppToken').value = '';
-  $('#wxpusherAppToken').placeholder = appTokenConfigured ? '已保存；留空保留，输入新 AppToken 可替换' : '输入 WxPusher AppToken';
-  $('#wxpusherAppTokenHint').textContent = appTokenConfigured ? 'AppToken 已配置（值不回传）；留空保存会保留现有值。' : 'AppToken 尚未配置。';
+  $('#wxpusherAppToken').placeholder = appTokenConfigured ? L('已保存；留空保留，输入新 AppToken 可替换') : L('输入 WxPusher AppToken');
+  $('#wxpusherAppTokenHint').textContent = appTokenConfigured ? L('AppToken 已配置（值不回传）；留空保存会保留现有值。') : L('AppToken 尚未配置。');
   const uidValues = String(config.wxpusherUids || '');
   const topicValues = String(config.wxpusherTopicIds || '');
   $('#wxpusherUids').value = uidValues;
   $('#wxpusherTopicIds').value = topicValues;
-  $('#wxpusherUidsHint').textContent = uidValues ? '显示当前已保存 UID；可直接编辑或清空。清空后若 Topic ID 也为空将无法保存。' : '尚未配置 UID；可逐行或逗号分隔输入。';
-  $('#wxpusherTopicIdsHint').textContent = topicValues ? '显示当前已保存 topicId；可直接编辑或清空。清空后若 UID 也为空将无法保存。' : '尚未配置 topicId；可逐行或逗号分隔输入。';
+  $('#wxpusherUidsHint').textContent = uidValues ? L('显示当前已保存 UID；可直接编辑或清空。清空后若 Topic ID 也为空将无法保存。') : L('尚未配置 UID；可逐行或逗号分隔输入。');
+  $('#wxpusherTopicIdsHint').textContent = topicValues ? L('显示当前已保存 topicId；可直接编辑或清空。清空后若 UID 也为空将无法保存。') : L('尚未配置 topicId；可逐行或逗号分隔输入。');
   $('#clearWebhookConfig').disabled = !config.webhookConfigured && !config.webhookSecretConfigured;
   $('#testWebhook').disabled = !config.webhookConfigured;
   $('#testWxpusher').disabled = !config.wxpusherAppTokenConfigured || (!uidValues.trim() && !topicValues.trim());
@@ -1229,17 +1277,17 @@ function notifyNewMail(events) {
   const ordered = events.slice().sort((a,b) => Number(Boolean(b.verificationCode)) - Number(Boolean(a.verificationCode)) || a.id - b.id);
   const visible = ordered.slice(0, 3);
   for (const event of visible) {
-    const sender = String(event.sender?.name || event.sender?.email || '新邮件').slice(0,100);
-    const subject = String(event.subject || '(无主题)').slice(0,160);
-    const title = event.verificationCode ? `验证码：${event.verificationCode}` : sender;
-    const body = event.verificationCode ? `${sender} · ${subject}` : `${subject} · ${event.account?.label || event.account?.email || '邮汇'}`;
+  const sender = String(event.sender?.name || event.sender?.email || L('新邮件')).slice(0,100);
+  const subject = String(event.subject || L('(无主题)')).slice(0,160);
+  const title = event.verificationCode ? `${L('验证码：')}${event.verificationCode}` : sender;
+  const body = event.verificationCode ? `${sender} · ${subject}` : `${subject} · ${event.account?.label || event.account?.email || L('邮汇')}`;
     try {
       const notification = new Notification(title, { body, tag:`youhui-mail-${event.id}`, renotify:false });
       notification.onclick = () => { window.focus(); notification.close(); };
     } catch {}
   }
   if (ordered.length > visible.length) {
-    try { new Notification(`还有 ${ordered.length-visible.length} 封新邮件`, { body:'打开邮汇查看收件箱。', tag:`youhui-mail-batch-${ordered.at(-1).id}`, renotify:false }); } catch {}
+    try { new Notification(I18N_LANG === 'en' ? `${ordered.length-visible.length} more new messages` : `还有 ${ordered.length-visible.length} 封新邮件`, { body:L('打开邮汇查看收件箱。'), tag:`youhui-mail-batch-${ordered.at(-1).id}`, renotify:false }); } catch {}
   }
 }
 async function pollNotificationEvents() {
@@ -1292,15 +1340,15 @@ function updateAIControls() {
   const input = $('#aiChatInput'); if (input) input.disabled = !configured || state.aiBusy;
   const status = $('#aiModelStatus');
   if (status) status.textContent = configured
-    ? `${state.aiConfig.providerName || '自定义服务商'} · ${state.aiConfig.model} · API 已配置${state.aiConfig.dailySummaryEnabled ? ` · 每日摘要 ${state.aiConfig.dailySummaryTime}（香港时间）` : ''}`
-    : '尚未配置模型 API';
+    ? `${state.aiConfig.providerName || L('自定义服务商')} · ${state.aiConfig.model} · ${L('API 已配置')}${state.aiConfig.dailySummaryEnabled ? `${L(' · 每日摘要 ')}${state.aiConfig.dailySummaryTime}${L('（香港时间）')}` : ''}`
+    : L('尚未配置模型 API');
   const label = $('#aiContextLabel'); const clear = $('#aiClearContext');
   if (label) {
-    label.textContent = state.aiContext ? `已附上：${state.aiContext.subject || '当前邮件'}` : '';
+    label.textContent = state.aiContext ? `${L('已附上：')}${state.aiContext.subject || L('当前邮件')}` : '';
     label.classList.toggle('hidden', !state.aiContext);
   }
   if (clear) clear.classList.toggle('hidden', !state.aiContext);
-  if (digestButton && !configured) digestButton.title = '请先配置模型 API';
+  if (digestButton && !configured) digestButton.title = L('请先配置模型 API');
   renderAIConversation();
 }
 function makeAIEmailContext(detail = state.detail) {
@@ -1331,18 +1379,18 @@ function renderAIConversation() {
   if (!state.aiMessages.length) {
     const welcome = document.createElement('p'); welcome.className = 'ai-welcome';
     welcome.textContent = state.aiConfig?.configured
-      ? '你好，我可以回答问题、解释你主动选择的邮件，或帮你起草回复。所有回复草稿都需要你检查后再发送。'
-      : '可配置任意兼容 OpenAI Chat Completions 的服务商 HTTPS API，自定义服务商名称和地址后即可开始对话。邮件只会在你明确选择功能后发送给模型。';
+      ? L('你好，我可以回答问题、解释你主动选择的邮件，或帮你起草回复。所有回复草稿都需要你检查后再发送。')
+      : L('可配置任意兼容 OpenAI Chat Completions 的服务商 HTTPS API，自定义服务商名称和地址后即可开始对话。邮件只会在你明确选择功能后发送给模型。');
     root.append(welcome);
   }
   for (const message of state.aiMessages) {
     const wrapper = document.createElement('article'); wrapper.className = `ai-message ${message.role}${message.error ? ' ai-error-message' : ''}`;
-    const label = document.createElement('span'); label.className = 'ai-message-label'; label.textContent = message.role === 'user' ? '你' : 'AI 助手';
+    const label = document.createElement('span'); label.className = 'ai-message-label'; label.textContent = message.role === 'user' ? L('你') : L('AI 助手');
     const bubble = document.createElement('div'); bubble.className = 'ai-message-bubble'; bubble.textContent = message.content;
     wrapper.append(label, bubble);
     if (message.role === 'assistant' && message.replyContext && !message.error) {
       const actions = document.createElement('div'); actions.className = 'ai-message-actions';
-      const insert = document.createElement('button'); insert.type = 'button'; insert.textContent = '插入回复草稿';
+      const insert = document.createElement('button'); insert.type = 'button'; insert.textContent = L('插入回复草稿');
       insert.addEventListener('click', () => applyAIReplyDraft(message)); actions.append(insert); wrapper.append(actions);
     }
     root.append(wrapper);
@@ -1350,7 +1398,7 @@ function renderAIConversation() {
   if (state.aiBusy) {
     const loading = document.createElement('div'); loading.className = 'ai-chat-status';
     const spinner = document.createElement('span'); spinner.className = 'spinner';
-    loading.append(spinner, document.createTextNode(' 正在处理…')); root.append(loading);
+    loading.append(spinner, document.createTextNode(` ${L(' 正在处理…')}`)); root.append(loading);
   }
   root.scrollTop = root.scrollHeight;
 }
@@ -1377,9 +1425,9 @@ function dailyDigestScope() {
   return state.accountId || 'all';
 }
 function dailyDigestScopeLabel(scope) {
-  if (scope === 'all') return '所有邮箱';
+  if (scope === 'all') return L('所有邮箱');
   const account = state.accounts.find((item) => item.id === scope);
-  return account?.label || account?.email || '所选邮箱';
+  return account?.label || account?.email || L('所选邮箱');
 }
 async function loadLatestAIDigest() {
   const scope = dailyDigestScope();
@@ -1387,7 +1435,7 @@ async function loadLatestAIDigest() {
     const data = await api(`/api/ai/digest/latest?accountId=${encodeURIComponent(scope)}`);
     const digest = data.digest;
     if (!digest || state.aiMessages.some((message) => message.digestDay === digest.day && message.digestScope === scope)) return;
-    state.aiMessages.push({ role:'assistant', content:`每日摘要（${digest.day} · ${dailyDigestScopeLabel(scope)}）\n\n${digest.summary}`, digestDay:digest.day, digestScope:scope });
+    state.aiMessages.push({ role:'assistant', content: I18N_LANG === 'en' ? `Daily digest (${digest.day} · ${dailyDigestScopeLabel(scope)})\n\n${digest.summary}` : `每日摘要（${digest.day} · ${dailyDigestScopeLabel(scope)}）\n\n${digest.summary}`, digestDay:digest.day, digestScope:scope });
     renderAIConversation();
   } catch {}
 }
@@ -1403,7 +1451,7 @@ async function sendAIMessage(prompt, { intent='chat', context=null, replyContext
   try {
     const data = await api('/api/ai/chat', { method:'POST', body:JSON.stringify({ message, history, intent, emailContext:state.aiContext }) });
     state.aiMessages.push({ role:'assistant', content:data.reply, ...(intent === 'reply' && replyContext ? {replyContext} : {}) });
-  } catch (error) { state.aiMessages.push({ role:'assistant', content:error.message || '模型请求失败。', error:true }); }
+  } catch (error) { state.aiMessages.push({ role:'assistant', content:error.message || L('模型请求失败。'), error:true }); }
   finally { state.aiBusy = false; updateAIControls(); }
 }
 async function requestDailyAIDigest() {
@@ -1411,30 +1459,30 @@ async function requestDailyAIDigest() {
   if (state.aiBusy) return;
   const scope = dailyDigestScope();
   const history = state.aiMessages.filter((item) => !item.error && ['user','assistant'].includes(item.role)).slice(-14).map(({role,content}) => ({role,content}));
-  state.aiMessages.push({ role:'user', content:`生成最近 24 小时的收件摘要（${dailyDigestScopeLabel(scope)}）。` });
+  state.aiMessages.push({ role:'user', content: I18N_LANG === 'en' ? `Generate a 24-hour inbox digest (${dailyDigestScopeLabel(scope)}).` : `生成最近 24 小时的收件摘要（${dailyDigestScopeLabel(scope)}）。` });
   state.aiBusy = true; updateAIControls();
   try {
     const data = await api('/api/ai/digest', { method:'POST', body:JSON.stringify({ accountId:scope }) });
     const digest = data.digest;
-    state.aiMessages.push({ role:'assistant', content:`收件摘要（${digest.day} · ${dailyDigestScopeLabel(scope)} · ${digest.messageCount} 封）\n\n${digest.summary}`, digestDay:digest.day, digestScope:scope });
-  } catch (error) { state.aiMessages.push({ role:'assistant', content:error.message || '摘要生成失败。', error:true }); }
+    state.aiMessages.push({ role:'assistant', content: I18N_LANG === 'en' ? `Inbox digest (${digest.day} · ${dailyDigestScopeLabel(scope)} · ${digest.messageCount} messages)\n\n${digest.summary}` : `收件摘要（${digest.day} · ${dailyDigestScopeLabel(scope)} · ${digest.messageCount} 封）\n\n${digest.summary}`, digestDay:digest.day, digestScope:scope });
+  } catch (error) { state.aiMessages.push({ role:'assistant', content:error.message || L('摘要生成失败。'), error:true }); }
   finally { state.aiBusy = false; updateAIControls(); }
 }
 function renderAIDailyAccounts(selected = 'all') {
   const select = $('#aiDailyAccount'); if (!select) return;
   select.replaceChildren();
-  select.add(new Option(`所有已连接邮箱（${state.accounts.length}）`, 'all'));
+  select.add(new Option(I18N_LANG === 'en' ? `All connected mailboxes (${state.accounts.length})` : `所有已连接邮箱（${state.accounts.length}）`, 'all'));
   for (const account of state.accounts) select.add(new Option(`${account.label || account.email} · ${account.email}`, account.id));
   select.value = state.accounts.some((account) => account.id === selected) ? selected : 'all';
 }
 function fillAISettingsForm() {
   const config = state.aiConfig || {};
-  const providerDefault = new URL(config.baseUrl || 'https://api.openai.com/v1').hostname === 'api.openai.com' ? 'OpenAI' : '自定义服务商';
+  const providerDefault = new URL(config.baseUrl || 'https://api.openai.com/v1').hostname === 'api.openai.com' ? 'OpenAI' : L('自定义服务商');
   $('#aiProviderName').value = config.providerName || providerDefault;
   $('#aiBaseUrl').value = config.baseUrl || 'https://api.openai.com/v1';
   $('#aiModel').value = config.model || 'gpt-4o-mini';
   $('#aiApiKey').value = '';
-  $('#aiApiKey').placeholder = config.hasApiKey ? '已保存；留空保留，输入新 Key 可替换' : '输入模型 API Key';
+  $('#aiApiKey').placeholder = config.hasApiKey ? L('已保存；留空保留，输入新 Key 可替换') : L('输入模型 API Key');
   $('#aiDailyEnabled').checked = Boolean(config.dailySummaryEnabled);
   $('#aiDailyTime').value = config.dailySummaryTime || '08:00';
   renderAIDailyAccounts(config.dailySummaryAccountId || 'all');
@@ -1453,7 +1501,7 @@ function aiSettingsPayload() {
   };
 }
 function aiSettingsStatus(text, isError = false) {
-  const node = $('#aiSettingsStatus'); node.textContent = text; node.classList.toggle('error', isError);
+  const node = $('#aiSettingsStatus'); node.textContent = L(text); node.classList.toggle('error', isError);
 }
 function updateTranslationProviderFields() {
   const provider = $('#translationProvider').value;
@@ -1464,18 +1512,18 @@ function updateTranslationProviderFields() {
   translationSettingsStatus(configured ? '当前服务商的凭据已保存。' : '当前服务商尚未配置。');
 }
 function translationSettingsStatus(text, isError = false) {
-  const node = $('#translationSettingsStatus'); node.textContent = text; node.classList.toggle('error', isError);
+  const node = $('#translationSettingsStatus'); node.textContent = L(text); node.classList.toggle('error', isError);
 }
 function fillTranslationSettingsForm() {
   const config = state.translationConfig || {};
   const provider = ['niutrans', 'google', 'azure'].includes(config.provider) ? config.provider : 'niutrans';
   $('#translationProvider').value = provider;
   $('#niutransAppId').value = ''; $('#niutransApiKey').value = ''; $('#googleApiKey').value = ''; $('#azureApiKey').value = ''; $('#azureRegion').value = '';
-  $('#niutransAppId').placeholder = config.hasNiuTransAppId ? '已保存；留空保留，填写新 App ID 可替换' : '小牛翻译控制台中的 App ID';
-  $('#niutransApiKey').placeholder = config.hasNiuTransApiKey ? '已保存；留空保留，输入新 Key 可替换' : '输入小牛翻译 API Key';
-  $('#googleApiKey').placeholder = config.hasGoogleApiKey ? '已保存；留空保留，输入新 Key 可替换' : '输入 Google Cloud Translation API Key';
-  $('#azureApiKey').placeholder = config.hasAzureApiKey ? '已保存；留空保留，输入新 Key 可替换' : '输入 Azure Translator Key';
-  $('#azureRegion').placeholder = config.hasAzureRegion ? '已保存；留空保留，输入新区域可替换' : '例如 eastasia';
+  $('#niutransAppId').placeholder = config.hasNiuTransAppId ? L('已保存；留空保留，填写新 App ID 可替换') : L('小牛翻译控制台中的 App ID');
+  $('#niutransApiKey').placeholder = config.hasNiuTransApiKey ? L('已保存；留空保留，输入新 Key 可替换') : L('输入小牛翻译 API Key');
+  $('#googleApiKey').placeholder = config.hasGoogleApiKey ? L('已保存；留空保留，输入新 Key 可替换') : L('输入 Google Cloud Translation API Key');
+  $('#azureApiKey').placeholder = config.hasAzureApiKey ? L('已保存；留空保留，输入新 Key 可替换') : L('输入 Azure Translator Key');
+  $('#azureRegion').placeholder = config.hasAzureRegion ? L('已保存；留空保留，输入新区域可替换') : L('例如 eastasia');
   const hasAny = config.hasNiuTransAppId || config.hasNiuTransApiKey || config.hasGoogleApiKey || config.hasAzureApiKey || config.hasAzureRegion;
   $('#translationDeleteConfig').disabled = !hasAny;
   updateTranslationProviderFields();
@@ -1495,18 +1543,18 @@ $('#aiSettingsButton').addEventListener('click', openAISettings);
 $('#aiExplainButton').addEventListener('click', () => {
   if (!state.detail) return;
   const context = makeAIEmailContext();
-  void sendAIMessage('请用中文解释这封邮件的主旨、对我的明确要求、时间要求和建议的后续动作。', { intent:'explain', context });
+  void sendAIMessage(L('请用中文解释这封邮件的主旨、对我的明确要求、时间要求和建议的后续动作。'), { intent:'explain', context });
 });
 $('#aiDraftButton').addEventListener('click', () => {
   if (!state.detail) return;
   const context = makeAIEmailContext(); const replyContext = makeAIReplyContext();
-  if (!replyContext) return toast('未能识别发件人地址，无法准备回复草稿。', true);
-  void sendAIMessage('请根据邮件内容起草一封合适、简洁的中文回复。只生成草稿，不要发送。', { intent:'reply', context, replyContext });
+  if (!replyContext) return toast(L('未能识别发件人地址，无法准备回复草稿。'), true);
+  void sendAIMessage(L('请根据邮件内容起草一封合适、简洁的中文回复。只生成草稿，不要发送。'), { intent:'reply', context, replyContext });
 });
 $('#aiAttachEmailButton').addEventListener('click', () => {
   if (!state.detail) return;
   state.aiContext = makeAIEmailContext(); updateAIControls();
-  toast('已附上当前邮件；后续对话会将其发送到已配置的模型 API。');
+  toast(L('已附上当前邮件；后续对话会将其发送到已配置的模型 API。'));
 });
 $('#aiClearContext').addEventListener('click', () => { state.aiContext = null; updateAIControls(); });
 $('#aiDigestButton').addEventListener('click', requestDailyAIDigest);
@@ -1564,7 +1612,7 @@ $('#translationDeleteConfig').addEventListener('click', async () => {
   } catch (error) { translationSettingsStatus(error.message, true); }
 });
 function notificationsSettingsStatus(text, isError = false) {
-  const node = $('#notificationsSettingsStatus'); node.textContent = text; node.classList.toggle('error', isError);
+  const node = $('#notificationsSettingsStatus'); node.textContent = L(text); node.classList.toggle('error', isError);
 }
 $('#notificationsSettingsForm').addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -1618,7 +1666,7 @@ $('#testWxpusher').addEventListener('click', async () => {
   }
 });
 function oauthSettingsStatus(message, isError = false) {
-  const node = $('#oauthSettingsStatus'); node.textContent = message; node.classList.toggle('error', isError);
+  const node = $('#oauthSettingsStatus'); node.textContent = L(message); node.classList.toggle('error', isError);
 }
 $('#oauthSettingsForm').addEventListener('submit', async (event) => {
   event.preventDefault(); const button = $('#saveOAuthConfig'); button.disabled = true; oauthSettingsStatus('正在加密保存 OAuth 设置…');
@@ -1642,16 +1690,16 @@ $('#oauthSettingsForm').addEventListener('submit', async (event) => {
 $$('[data-bind-identity]').forEach((button) => button.addEventListener('click', async () => {
   const provider = button.dataset.bindIdentity;
   const current = state.oauthConfig?.login?.[provider];
-  if (current?.bound && !await askConfirm(`重新绑定 ${provider}？`, '重新授权后，此登录方式将绑定到本次授权的身份；旧绑定会被替换。', '继续授权')) return;
+  if (current?.bound && !await askConfirm(I18N_LANG === 'en' ? `Relink ${provider}?` : `重新绑定 ${provider}？`, L('重新授权后，此登录方式将绑定到本次授权的身份；旧绑定会被替换。'), L('继续授权'))) return;
   await startExternalLogin(provider, 'bind');
 }));
 $$('[data-unbind-identity]').forEach((button) => button.addEventListener('click', async () => {
   const provider = button.dataset.unbindIdentity;
-  if (!await askConfirm(`解除 ${provider} 绑定？`, '此操作会删除该第三方身份的工作台登录权限；仍可使用工作台密码解锁。', '解除绑定', true)) return;
+  if (!await askConfirm(I18N_LANG === 'en' ? `Unlink the ${provider} identity?` : `解除 ${provider} 绑定？`, L('此操作会删除该第三方身份的工作台登录权限；仍可使用工作台密码解锁。'), L('解除绑定'), true)) return;
   button.disabled = true;
   try {
     state.oauthConfig = await api(`/api/identity/${encodeURIComponent(provider)}`, { method:'DELETE' });
-    state.status = await api('/api/status'); fillOAuthSettingsForm(); toast(`${provider} 身份已解除绑定。`);
+    state.status = await api('/api/status'); fillOAuthSettingsForm(); toast(`${provider} ${L('身份已解除绑定。')}`);
   } catch (error) { oauthSettingsStatus(error.message, true); }
   finally { button.disabled = false; }
 }));

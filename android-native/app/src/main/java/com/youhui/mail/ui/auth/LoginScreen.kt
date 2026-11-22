@@ -31,6 +31,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.youhui.mail.data.remote.dto.StatusDto
+import com.youhui.mail.data.remote.readableMessage
 import com.youhui.mail.data.repository.AuthRepository
 import com.youhui.mail.data.repository.toUserMessage
 import com.youhui.mail.di.ServiceLocator
@@ -74,7 +75,8 @@ fun LoginScreen(
                 OAuthLoopback.login(activityContext, serviceLocator, provider)
                 onLoggedIn()
             } catch (e: Exception) {
-                error = e.toUserMessage()
+                // readableMessage 优先透出服务端 { error } 文案（如 state/PKCE 校验失败的具体原因）
+                error = e.readableMessage()
             } finally {
                 oauthBusyProvider = null
             }

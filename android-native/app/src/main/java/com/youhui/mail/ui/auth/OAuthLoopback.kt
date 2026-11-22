@@ -108,6 +108,7 @@ object OAuthLoopback {
             val token = locator.api().oauthExchange(
                 ExchangeReq(
                     code = code,
+                    state = deviceState,
                     codeVerifier = verifier,
                     deviceId = store.deviceId,
                     deviceLabel = store.deviceLabel

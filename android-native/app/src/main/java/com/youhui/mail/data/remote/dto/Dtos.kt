@@ -198,6 +198,7 @@ data class OauthStartDto(val url: String)
 @Serializable
 data class ExchangeReq(
     val code: String,
+    val state: String,
     val codeVerifier: String,
     val deviceId: String,
     val deviceLabel: String

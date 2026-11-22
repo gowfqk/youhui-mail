@@ -30,6 +30,16 @@ Android 客户端源码位于 [`android-native/`](android-native/)（Kotlin/Comp
 
 `google-services.json` 按项目私有文件处理、不入版本库：放置于 `android-native/app/` 时构建自动启用 FCM，缺失时工程仍可编译（仅推送不可用）。启用推送还需在当前邮汇部署中安全设置 FCM 服务账号；详细构建、安全边界和服务端配置见 [`android-native/README.md`](android-native/README.md)。
 
+### 发布签名 APK
+
+推送 `v*-native` 标签会自动构建**固定签名**的 release APK 并发布到 GitHub Releases；`main` 分支与手动触发的构建产出固定签名 debug 包（仅作测试用）。签名与 FCM 配置不进入版本库，来自以下仓库 Secrets：
+
+- `ANDROID_FIREBASE_CONFIG`：`google-services.json` 文件内容
+- `ANDROID_KEYSTORE_B64`：PKCS12 签名密钥库的 base64 编码
+- `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_ALIAS_PASSWORD`：密钥库口令与别名
+
+发版步骤：更新 `android-native/app/build.gradle` 的 `versionCode`/`versionName` → 推送 `v*-native` 标签 → Actions 自动构建并创建 Release。签名密钥通过 Secret 只写不读，务必离线备份 `.keystore` 文件与口令；丢失后将无法发布可覆盖安装的更新。本地构建无需配置 Secrets：把 `google-services.json` 放回 `android-native/app/` 即可。
+
 ## Docker 镜像
 
 GitHub Actions 会在 `main` 分支或 `v*` 版本标签推送时构建并发布 `ghcr.io/gowfqk/youhui-mail`；Pull Request 只验证构建，不发布镜像。运行时数据库和加密密钥保存在独立的 `/data` 卷中，不会打包进镜像。首次启动时，打开 `http://localhost:3000` 并设置至少 12 位的工作台密码。

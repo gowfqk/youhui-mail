@@ -1,6 +1,6 @@
 const state = {
   status: null, accounts: [], defaultAccountId: '', folders: [], folder: 'INBOX', accountId: 'all', cursor: null, cursorStack: [], query: '',
-  messages: [], total: 0, selected: null, detail: null, olderFirst: false, busy: false, searchTimer: null, mailListRequestId: 0,
+  messages: [], total: 0, selected: null, detail: null, olderFirst: false, threadView: false, busy: false, searchTimer: null, mailListRequestId: 0,
   aiConfig: null, translationConfig: null, notificationConfig: null, oauthConfig: null, mcpConfig: null, aiMessages: [], aiContext: null, aiBusy: false
 };
 // ---- 语言 / i18n：zh 为默认，localStorage 记忆，切换后整页刷新 ----
@@ -195,6 +195,7 @@ function showAuth() {
 }
 async function boot() {
   applyI18nDom(); syncLangToggle(); document.documentElement.lang = I18N_LANG === 'en' ? 'en' : 'zh-CN';
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   try {
     state.status = await api('/api/status');
     if (state.status.authenticated) await showApp(); else showAuth();
@@ -331,6 +332,16 @@ function renderMessageListData(data, source) {
   $('#messageCount').textContent = state.total > 99 ? '99+' : String(state.total);
   $('#inboxUnread').textContent = state.folder === 'INBOX' ? String(incoming.filter((message) => message.unread).length || '') : '';
   if (state.olderFirst) state.messages.reverse();
+  if (state.threadView) {
+    const threads = {};
+    for (const m of state.messages) {
+      const key = m.threadKey || (m.subject || '').toLowerCase();
+      if (!threads[key]) { threads[key] = { ...m, threadCount: 1, threadIds: [m] }; }
+      else { threads[key].threadCount++; threads[key].threadIds.push(m); if (new Date(m.date) > new Date(threads[key].date)) { threads[key].date = m.date; threads[key].subject = m.subject; } }
+    }
+    state.messages = Object.values(threads).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+    if (!state.olderFirst) state.messages.reverse();
+  }
   if (!state.messages.length) renderEmpty();
   else { $('#listEmpty').classList.add('hidden'); renderMessages(); }
   const hasPages = state.cursorStack.length > 0 || state.hasMore;
@@ -387,9 +398,10 @@ function renderMessages() {
     const account = state.accounts.find((a) => a.id === m.accountId);
     const preview = fromEmail && sender !== fromEmail ? fromEmail : (account && state.accounts.length > 1 ? account.email : '');
     const selected = state.selected && state.selected.uid === m.uid && state.selected.accountId === m.accountId;
+    const threadBadge = m.threadCount > 1 ? `<span class="thread-badge">${m.threadCount}</span>` : '';
     return `<article class="message-row ${m.unread?'unread':''} ${selected?'selected':''}" data-idx="${index}" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="${L('打开邮件：')}${escapeHtml(m.subject)}">
       <span class="sender-avatar ${colorClass(fromEmail || sender)}">${escapeHtml(initials(sender))}</span>
-      <div class="message-content"><div class="message-line"><span class="message-sender">${escapeHtml(sender)}</span><time class="message-time">${escapeHtml(dateShort(m.date))}</time></div>
+      <div class="message-content"><div class="message-line"><span class="message-sender">${escapeHtml(sender)}${threadBadge}</span><time class="message-time">${escapeHtml(dateShort(m.date))}</time></div>
       <div class="message-subject">${escapeHtml(m.subject || L('(无主题)'))}</div><div class="message-preview">${escapeHtml(preview || L('点击查看邮件内容'))}</div>
       <div class="message-foot"><span class="mail-chip">${escapeHtml(account?.label || account?.email || m.accountEmail || '')}</span>${m.flagged?'<span class="star-mark">★</span>':''}</div></div></article>`;
   }).join('');
@@ -990,6 +1002,7 @@ $$('.folder-nav [data-folder]').forEach(button=>button.addEventListener('click',
 $('#searchInput').addEventListener('input',event=>{clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.cursor=null;state.cursorStack.length=0;state.searchTimer=setTimeout(loadMessages,350);});
 $('#searchInput').addEventListener('keydown',event=>{if(event.key==='Enter'){clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.cursor=null;state.cursorStack.length=0;loadMessages();}});
 $('#sortButton').addEventListener('click',()=>{state.olderFirst=!state.olderFirst;renderMessages();});
+$('#threadButton').addEventListener('click',()=>{state.threadView=!state.threadView;state.selected=null;state.detail=null;renderMessageListData({messages:state.threadView?[]:state.messages,total:state.total,hasMore:state.hasMore}, 'local');loadMessages();});
 $('#prevPage').addEventListener('click',()=>{if(state.cursorStack.length){state.cursor=state.cursorStack.pop();state.selected=null;loadMessages();}});
 $('#nextPage').addEventListener('click',()=>{if(state.hasMore){state.cursorStack.push(state.cursor);const next={...(state.cursor||{})};for(const message of state.messages){const uid=Number(message.uid);if(!uid)continue;const known=next[message.accountId];if(known===undefined||uid<known)next[message.accountId]=uid;}state.cursor=next;state.selected=null;loadMessages();}});
 $('#logoutButton').addEventListener('click',async()=>{try{await api('/api/logout',{method:'POST'});}catch{}state.accounts=[];state.selected=null;state.detail=null;state.aiConfig=null;state.translationConfig=null;state.aiMessages=[];state.aiContext=null;state.status={...(state.status||{}),authenticated:false};closeAIChat(false);showAuth();toast('工作台已锁定。');});

@@ -671,6 +671,9 @@ async function verifyAccount(account) {
     return true;
   });
 }
+function normalizeThreadKey(subject) {
+  return String(subject || '').replace(/^(?:(?:re|fwd?|aw|sv|fw|转寄|回复)\s*[:：]\s*)+/i, '').trim().toLowerCase();
+}
 function normalizeManual(body) {
   const email = String(body.email || '').trim();
   const username = String(body.username || email).trim();
@@ -802,12 +805,13 @@ async function fetchMessages(account, folderKey, page, limit, query, { beforeUid
       const start = (page - 1) * limit;
       const pageSeqs = beforeUid ? seqs : seqs.slice(start, start + limit);
       if (!pageSeqs.length) return { accountId: account.id, path: pathName, messages: [], total: matched };
-      const fetched = await client.fetchAll(pageSeqs.join(','), { uid: true, envelope: true, flags: true, internalDate: true, size: true });
+const fetched = await client.fetchAll(pageSeqs.join(','), { uid: true, envelope: true, flags: true, internalDate: true, size: true });
       const messages = fetched.map((item) => ({
         accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: pathName,
         subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
         date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
-        flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0
+        flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0,
+        threadKey: normalizeThreadKey(item.envelope?.subject || '')
       }));
       messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
       return { accountId: account.id, path: pathName, messages, total: matched };
@@ -1280,6 +1284,7 @@ function eventPayload(account, item, uid, code) {
   const receivedAt = new Date(receivedAtValue).toISOString();
   return {
     event:'mail.new', eventId:0, occurredAt:new Date().toISOString(),
+    accountId:account.id, uid:uid, folder:'INBOX',
     account:{ label:String(account.label || '').slice(0,80), email:String(account.email || '').slice(0,254) },
     sender:{ name:String(from.name || '').replace(/[\r\n]+/g,' ').slice(0,120), email:String(from.address || '').slice(0,254) },
     subject, receivedAt, verificationCode:code || null,

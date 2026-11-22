@@ -1,11 +1,11 @@
-package com.youhui.mail.util
+﻿package com.youhui.mail.util
 
 import android.net.Uri
 import java.net.URI
 import java.util.Locale
 
 /**
- * 服务端地址规范化：移植自现有 WebView 版 MainActivity.normalizeServerUrl（android/app/.../MainActivity.java:540）。
+ * 服务端地址规范化：仅接受 HTTPS 根地址语义与历史 WebView 版实现一致。
  * 仅接受 HTTPS 根地址（可带端口），拒绝 userinfo / query / fragment / 路径。
  */
 object UrlGuards {

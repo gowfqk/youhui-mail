@@ -26,11 +26,9 @@ npm start
 
 ## Android 客户端
 
-Android 配套客户端源码位于 [`android/`](android/)，使用 Android Studio 打开该目录即可构建。首次启动地址栏为空，由用户输入自己的邮汇 HTTPS 根地址；客户端不允许明文 HTTP。它以安全 WebView 复用现有响应式工作台，支持邮汇密码登录、附件选择、同源附件下载和 Android 原生 FCM 唤醒通知。FCM 只传通用信号，邮件详情由客户端通过登录会话从邮汇服务器读取。Google 等提供商可能阻止嵌入式 WebView OAuth。
+Android 客户端源码位于 [`android-native/`](android-native/)（Kotlin/Compose），使用 Android Studio 打开该目录即可构建。客户端不允许明文 HTTP；支持邮汇密码登录与第三方身份 OAuth 回环登录（RFC 8252 + PKCE S256）、附件选择、同源附件下载和 Android 原生 FCM 唤醒通知。FCM 只传通用信号，邮件详情由客户端通过登录会话从邮汇服务器读取。
 
-启用 FCM 需要为包名 `com.youhui.mail` 配置 Firebase `google-services.json`（放在 `android/app/`），并在当前邮汇部署中安全设置 FCM 服务账号；不含 Firebase 配置的 APK 可正常使用工作台，但不会启用推送。详细构建、安全边界和服务端配置见 [`android/README.md`](android/README.md)。
-
-原生客户端源码位于 [`android-native/`](android-native/)（Kotlin/Compose），同样使用 Android Studio 打开该目录即可构建。其 `google-services.json` 与 WebView 版一致按项目私有文件处理、不入版本库：放置于 `android-native/app/` 时自动启用 FCM，缺失时工程仍可编译（仅推送不可用）。详细说明见 [`android-native/README.md`](android-native/README.md)。
+`google-services.json` 按项目私有文件处理、不入版本库：放置于 `android-native/app/` 时构建自动启用 FCM，缺失时工程仍可编译（仅推送不可用）。启用推送还需在当前邮汇部署中安全设置 FCM 服务账号；详细构建、安全边界和服务端配置见 [`android-native/README.md`](android-native/README.md)。
 
 ## Docker 镜像
 
@@ -103,7 +101,7 @@ Webhook 只有在用户填写地址、启用并保存后才会发送新邮件通
 
 企业微信群机器人地址（`qyapi.weixin.qq.com/cgi-bin/webhook/send`）会自动改用企业微信的 `text` 消息格式，内容包含邮箱、发件人、主题、时间以及有明确提示时提取的验证码，不包含正文或附件。测试为独立的测试文本；企业微信返回的 `errcode` 必须为 0 才算成功，HTTP 200 并不一定代表推送成功。签名如有配置，仍按实际发送的 JSON 请求体计算。其他地址保持上述通用 JSON 事件格式。测试失败时会尽可能显示 HTTP 状态或企业微信错误码，不回显地址或密钥。
 
-Android 原生推送是独立于浏览器通知和 Webhook 的 FCM 通道。服务器通过 FCM HTTP v1 发送只含 `type=mail.new` 的高优先级唤醒消息，不能携带邮件元数据；客户端再使用邮汇登录 Cookie 从 `/api/notifications/events` 拉取事件，详情只在本机生成通知。锁屏公开预览隐藏邮件内容。启用时需在 Firebase 项目打开 Firebase Cloud Messaging API，并将服务账号 JSON 通过 `FCM_SERVICE_ACCOUNT_JSON` 环境变量或安全挂载文件路径 `GOOGLE_APPLICATION_CREDENTIALS` 提供给服务端；不要将私钥提交到源码或镜像。Android 端还需在 `android/app/` 放置 Firebase 为 `com.youhui.mail` 生成的 `google-services.json`，并授予 Android 通知权限。缺少任一端配置时，FCM 不会工作；完整设置步骤见 [`android/README.md`](android/README.md)。
+Android 原生推送是独立于浏览器通知和 Webhook 的 FCM 通道。服务器通过 FCM HTTP v1 发送只含 `type=mail.new` 的高优先级唤醒消息，不能携带邮件元数据；客户端再使用邮汇登录会话（网页 Cookie 或移动端 Bearer 令牌）从 `/api/notifications/events` 拉取事件，详情只在本机生成通知。锁屏公开预览隐藏邮件内容。启用时需在 Firebase 项目打开 Firebase Cloud Messaging API，并将服务账号 JSON 通过 `FCM_SERVICE_ACCOUNT_JSON` 环境变量或安全挂载文件路径 `GOOGLE_APPLICATION_CREDENTIALS` 提供给服务端；不要将私钥提交到源码或镜像。Android 端还需在 `android-native/app/` 放置 Firebase 为 `com.youhui.mail` 生成的 `google-services.json`，并授予 Android 通知权限。缺少任一端配置时，FCM 不会工作；完整设置步骤见 [`android-native/README.md`](android-native/README.md)。
 
 ## 移动端原生客户端接入
 

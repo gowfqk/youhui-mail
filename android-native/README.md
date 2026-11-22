@@ -1,7 +1,6 @@
 # 邮汇原生 Android 客户端（Kotlin + Jetpack Compose）
 
-本目录是按《邮汇原生 Android 客户端改造设计文档》（Part B）搭建的原生 UI 客户端脚手架。
-现有 `android/` 目录的 Java WebView 外壳**保持不变**，作为回退版本并存。
+本目录是按《邮汇原生 Android 客户端改造设计文档》（Part B）搭建的原生 UI 客户端，是邮汇唯一的 Android 客户端。
 
 ## 当前进度（对应设计文档 B8 分阶段清单）
 

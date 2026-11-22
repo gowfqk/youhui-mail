@@ -1,4 +1,4 @@
-plugins {
+﻿plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
     id 'org.jetbrains.kotlin.plugin.serialization'
@@ -6,7 +6,7 @@ plugins {
     id 'com.google.devtools.ksp'
 }
 
-// Firebase 配置按项目私有文件处理（与 android/ WebView 版相同的条件应用逻辑）：
+// Firebase 配置按项目私有文件处理（有 google-services.json 时自动启用，缺失仍可编译）：
 // 有 google-services.json 时自动启用 Google Services 插件与 FCM；没有时工程仍可编译。
 if (file('google-services.json').isFile()) {
     apply plugin: 'com.google.gms.google-services'
@@ -67,7 +67,7 @@ dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3'
 
-    // Firebase 推送（阶段 4 接入 PushMessagingService/PushSyncWorker；版本与 android/ WebView 版一致）
+    // Firebase 推送（阶段 4 接入 PushMessagingService/PushSyncWorker；与 Firebase BOM 35.2.0 对齐）
     implementation platform('com.google.firebase:firebase-bom:35.2.0')
     implementation 'com.google.firebase:firebase-messaging'
 

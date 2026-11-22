@@ -52,6 +52,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.youhui.mail.di.ServiceLocator
 import kotlinx.coroutines.launch
 import java.util.Locale
+import com.youhui.mail.util.t
 
 /** 写信 / 回复页面。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -85,7 +86,7 @@ fun ComposeScreen(
             TopAppBar(
                 title = { Text(if (state.reply?.mode == ReplyDraft.Mode.REPLY) "回复" else "写信") },
                 navigationIcon = {
-                    IconButton(onClick = onFinished) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = onFinished) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回")) }
                 },
                 actions = {
                     FilledIconButton(
@@ -104,7 +105,7 @@ fun ComposeScreen(
                                 && (state.subject.isNotBlank() || state.text.isNotBlank())
                     ) {
                         if (state.sending) CircularProgressIndicator(Modifier.width(22.dp).height(22.dp))
-                        else Icon(Icons.Filled.Send, contentDescription = "发送")
+                        else Icon(Icons.Filled.Send, contentDescription = t("发送"))
                     }
                 }
             )
@@ -142,7 +143,7 @@ fun ComposeScreen(
             OutlinedTextField(
                 value = state.to,
                 onValueChange = { viewModel.update(to = it) },
-                label = { Text("收件人") },
+                label = { Text(t("收件人")) },
                 placeholder = { Text("a@example.com, b@example.com") },
                 singleLine = true,
                 enabled = !state.sending,
@@ -151,7 +152,7 @@ fun ComposeScreen(
             OutlinedTextField(
                 value = state.cc,
                 onValueChange = { viewModel.update(cc = it) },
-                label = { Text("抄送（可选）") },
+                label = { Text(t("抄送（可选）")) },
                 singleLine = true,
                 enabled = !state.sending,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
@@ -159,7 +160,7 @@ fun ComposeScreen(
             OutlinedTextField(
                 value = state.subject,
                 onValueChange = { viewModel.update(subject = it) },
-                label = { Text("主题") },
+                label = { Text(t("主题")) },
                 singleLine = true,
                 enabled = !state.sending,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
@@ -167,7 +168,7 @@ fun ComposeScreen(
             OutlinedTextField(
                 value = state.text,
                 onValueChange = { viewModel.update(text = it) },
-                label = { Text("正文") },
+                label = { Text(t("正文")) },
                 minLines = 8,
                 enabled = !state.sending,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).height(240.dp)
@@ -180,7 +181,7 @@ fun ComposeScreen(
                 Text("附件（${state.attachments.size}/10）", style = MaterialTheme.typography.titleSmall)
                 AssistChip(
                     onClick = { filePicker.launch("*/*") },
-                    label = { Text("添加附件") },
+                    label = { Text(t("添加附件")) },
                     leadingIcon = { Icon(Icons.Filled.AttachFile, contentDescription = null, Modifier.width(18.dp)) }
                 )
             }

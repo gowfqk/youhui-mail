@@ -1,5 +1,7 @@
 package com.youhui.mail.ui.inbox
 
+import com.youhui.mail.util.I18n
+import com.youhui.mail.util.t
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -96,13 +98,13 @@ fun InboxScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("邮汇 · ${state.folders.firstOrNull { it.first == state.folder }?.second ?: state.folder}") },
+                title = { Text("${t("邮汇 · ")}${state.folders.firstOrNull { it.first == state.folder }?.second ?: state.folder}") },
                 actions = {
                     IconButton(onClick = onOpenAi) {
-                        Icon(Icons.Filled.AutoAwesome, contentDescription = "AI 助手")
+                        Icon(Icons.Filled.AutoAwesome, contentDescription = t("AI 助手"))
                     }
                     IconButton(onClick = onSettings) {
-                        Icon(Icons.Filled.Settings, contentDescription = "设置")
+                        Icon(Icons.Filled.Settings, contentDescription = t("设置"))
                     }
                 }
             )
@@ -112,7 +114,7 @@ fun InboxScreen(
                 ExtendedFloatingActionButton(
                     onClick = onCompose,
                     icon = { Icon(Icons.Filled.Edit, contentDescription = null) },
-                    text = { Text("写信") }
+                    text = { Text(t("写信")) }
                 )
             }
         }
@@ -131,7 +133,7 @@ fun InboxScreen(
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (state.fromCache && !state.loading) {
                 Text(
-                    "离线缓存（${state.messages.size} 封，无法连接服务器时显示）",
+                    if (I18n.lang == I18n.EN) "Offline cache (${state.messages.size} messages, shown when the server is unreachable)" else "离线缓存（${state.messages.size} 封，无法连接服务器时显示）",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp)
@@ -145,7 +147,7 @@ fun InboxScreen(
             ) {
                 if (state.messages.isEmpty() && !state.loading) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(if (state.error == null) "暂无邮件" else state.error ?: "", style = MaterialTheme.typography.bodyLarge)
+                        Text(if (state.error == null) t("暂无邮件") else state.error ?: "", style = MaterialTheme.typography.bodyLarge)
                     }
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
@@ -189,10 +191,10 @@ private fun FilterBar(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box {
                 OutlinedButton(onClick = { accountMenu = true }) {
-                    Text(if (selectedAccount == "all") "全部邮箱" else accounts.firstOrNull { it.first == selectedAccount }?.second ?: selectedAccount)
+                    Text(if (selectedAccount == "all") t("全部邮箱") else accounts.firstOrNull { it.first == selectedAccount }?.second ?: selectedAccount)
                 }
                 DropdownMenu(expanded = accountMenu, onDismissRequest = { accountMenu = false }) {
-                    DropdownMenuItem(text = { Text("全部邮箱") }, onClick = { accountMenu = false; onAccount("all") })
+                    DropdownMenuItem(text = { Text(t("全部邮箱")) }, onClick = { accountMenu = false; onAccount("all") })
                     for ((id, label) in accounts) {
                         DropdownMenuItem(text = { Text(label) }, onClick = { accountMenu = false; onAccount(id) })
                     }
@@ -217,7 +219,7 @@ private fun FilterBar(
         OutlinedTextField(
             value = query,
             onValueChange = onQuery,
-            label = { Text("搜索邮件") },
+            label = { Text(t("搜索邮件")) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
         )
@@ -265,7 +267,7 @@ private fun MailRow(item: MailItemDto, onClick: () -> Unit, onToggleStar: () -> 
                     )
                 }
                 Text(
-                    item.subject ?: "(无主题)",
+                    item.subject ?: t("(无主题)"),
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = if (item.unread) FontWeight.Medium else FontWeight.Normal,
                     maxLines = 2,
@@ -275,7 +277,7 @@ private fun MailRow(item: MailItemDto, onClick: () -> Unit, onToggleStar: () -> 
             IconButton(onClick = onToggleStar) {
                 Icon(
                     imageVector = if (item.flagged) Icons.Filled.Star else Icons.Outlined.StarOutline,
-                    contentDescription = if (item.flagged) "取消星标" else "加星"
+                    contentDescription = if (item.flagged) t("取消星标") else t("加星")
                 )
             }
         }

@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.youhui.mail.util.UrlGuards
+import com.youhui.mail.util.t
 
 /** 首次启动：输入邮汇 HTTPS 根地址（对齐现有 WebView 版校验规则）。 */
 @Composable
@@ -37,14 +38,14 @@ fun ServerSetupScreen(onConfigured: (String) -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("邮汇", style = MaterialTheme.typography.displaySmall)
+        Text(t("邮汇"), style = MaterialTheme.typography.displaySmall)
         Spacer(Modifier.height(8.dp))
-        Text("输入你的邮汇服务器地址以开始使用", style = MaterialTheme.typography.bodyMedium)
+        Text(t("输入你的邮汇服务器地址以开始使用"), style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(24.dp))
         OutlinedTextField(
             value = raw,
             onValueChange = { raw = it; error = null },
-            label = { Text("服务器地址") },
+            label = { Text(t("服务器地址")) },
             placeholder = { Text("https://mail.example.com") },
             singleLine = true,
             isError = error != null,
@@ -56,16 +57,16 @@ fun ServerSetupScreen(onConfigured: (String) -> Unit) {
             onClick = {
                 val normalized = UrlGuards.normalizeServerUrl(raw)
                 if (normalized == null) {
-                    error = "仅接受 HTTPS 根地址（例如 https://mail.example.com）"
+                    error = t("仅接受 HTTPS 根地址（例如 https://mail.example.com）")
                 } else {
                     onConfigured(normalized)
                 }
             },
             modifier = Modifier.fillMaxWidth()
-        ) { Text("继续") }
+        ) { Text(t("继续")) }
         Spacer(Modifier.height(12.dp))
         Text(
-            "仅接受 HTTPS 根地址，以保护登录会话和邮件内容。",
+            t("仅接受 HTTPS 根地址，以保护登录会话和邮件内容。"),
             style = MaterialTheme.typography.bodySmall
         )
     }

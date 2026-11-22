@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.youhui.mail.di.ServiceLocator
+import com.youhui.mail.util.t
 
 private val presetLabels = mapOf(
     "custom" to "自定义",
@@ -82,9 +83,9 @@ fun AccountEditScreen(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
-                title = { Text("添加邮箱账户") },
+                title = { Text(t("添加邮箱账户")) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回") }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = t("返回")) }
                 }
             )
         }
@@ -124,7 +125,7 @@ fun AccountEditScreen(
                 OutlinedTextField(
                     value = state.email,
                     onValueChange = { viewModel.update(email = it) },
-                    label = { Text("邮箱地址") },
+                    label = { Text(t("邮箱地址")) },
                     placeholder = { Text("name@example.com") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
@@ -133,7 +134,7 @@ fun AccountEditScreen(
                 OutlinedTextField(
                     value = state.password,
                     onValueChange = { viewModel.update(password = it) },
-                    label = { Text("密码 / 应用专用密码") },
+                    label = { Text(t("密码 / 应用专用密码")) },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -142,7 +143,7 @@ fun AccountEditScreen(
                 OutlinedTextField(
                     value = state.label,
                     onValueChange = { viewModel.update(label = it) },
-                    label = { Text("显示名称（可选）") },
+                    label = { Text(t("显示名称（可选）")) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -152,14 +153,14 @@ fun AccountEditScreen(
                     OutlinedTextField(
                         value = state.imapHost,
                         onValueChange = { viewModel.update(imapHost = it) },
-                        label = { Text("服务器") },
+                        label = { Text(t("服务器")) },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
                         value = state.imapPort,
                         onValueChange = { viewModel.update(imapPort = it) },
-                        label = { Text("端口") },
+                        label = { Text(t("端口")) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(0.4f)
@@ -179,14 +180,14 @@ fun AccountEditScreen(
                     OutlinedTextField(
                         value = state.smtpHost,
                         onValueChange = { viewModel.update(smtpHost = it) },
-                        label = { Text("服务器") },
+                        label = { Text(t("服务器")) },
                         singleLine = true,
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
                         value = state.smtpPort,
                         onValueChange = { viewModel.update(smtpPort = it) },
-                        label = { Text("端口") },
+                        label = { Text(t("端口")) },
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.weight(0.4f)
@@ -208,7 +209,7 @@ fun AccountEditScreen(
                         modifier = Modifier.weight(1f)
                     ) {
                         if (state.testing) CircularProgressIndicator(Modifier.size(16.dp))
-                        else Text("测试连接")
+                        else Text(t("测试连接"))
                     }
                     Button(
                         onClick = { viewModel.save() },
@@ -216,7 +217,7 @@ fun AccountEditScreen(
                         modifier = Modifier.weight(1f)
                     ) {
                         if (state.saving) CircularProgressIndicator(Modifier.size(16.dp))
-                        else Text("保存账户")
+                        else Text(t("保存账户"))
                     }
                 }
                 Spacer(Modifier.height(24.dp))

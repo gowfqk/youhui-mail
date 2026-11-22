@@ -20,21 +20,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # sdkmanager（cmdline-tools 16+）需要 Java 17，先装 JDK 再装 SDK
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      # runner 镜像不再预装 Android SDK，需显式安装 cmdline-tools 提供 sdkmanager
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      # runner 镜像不再预装可用的 sdkmanager；android-actions/setup-android@v3 会因查找已废弃
+      # 的 tools 包而失败，因此直接手动安装 cmdline-tools 并补齐构建组件
       - name: Install Android SDK components
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if [ ! -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            curl -fsSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/clt.zip
+            mkdir -p "$SDK_ROOT/cmdline-tools"
+            unzip -q /tmp/clt.zip -d "$SDK_ROOT/cmdline-tools"
+            mv "$SDK_ROOT/cmdline-tools/cmdline-tools" "$SDK_ROOT/cmdline-tools/latest"
+          fi
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null < /dev/null || true
+          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

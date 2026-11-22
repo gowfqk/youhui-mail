@@ -22,8 +22,8 @@ android {
         applicationId 'com.youhui.mail'
         minSdk 27
         targetSdk 35
-        versionCode 10
-        versionName '2.2.4-native'
+        versionCode 14
+        versionName '2.4.2-native'
     }
 
     buildTypes {

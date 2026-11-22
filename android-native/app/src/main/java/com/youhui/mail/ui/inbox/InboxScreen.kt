@@ -17,7 +17,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -65,7 +67,8 @@ fun InboxScreen(
     serviceLocator: ServiceLocator,
     onOpenMessage: (accountId: String, uid: Long, folder: String) -> Unit,
     onCompose: () -> Unit,
-    onDevices: () -> Unit
+    onOpenAi: () -> Unit,
+    onSettings: () -> Unit
 ) {
     val viewModel: InboxViewModel = viewModel(factory = InboxViewModel.Factory(serviceLocator.mailRepository(), serviceLocator.mailCache))
     val state by viewModel.state.collectAsState()
@@ -95,7 +98,12 @@ fun InboxScreen(
             TopAppBar(
                 title = { Text("邮汇 · ${state.folders.firstOrNull { it.first == state.folder }?.second ?: state.folder}") },
                 actions = {
-                    TextButton(onClick = onDevices) { Text("设备") }
+                    IconButton(onClick = onOpenAi) {
+                        Icon(Icons.Filled.AutoAwesome, contentDescription = "AI 助手")
+                    }
+                    IconButton(onClick = onSettings) {
+                        Icon(Icons.Filled.Settings, contentDescription = "设置")
+                    }
                 }
             )
         },

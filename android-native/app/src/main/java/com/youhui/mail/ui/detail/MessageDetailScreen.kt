@@ -23,8 +23,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AssistChip
+import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +40,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.Composable
@@ -46,7 +53,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -54,6 +63,8 @@ import com.youhui.mail.di.ServiceLocator
 import com.youhui.mail.data.repository.toUserMessage
 import com.youhui.mail.data.remote.dto.AttachmentMetaDto
 import com.youhui.mail.data.remote.dto.MessageDto
+import com.youhui.mail.data.remote.dto.TranslationReq
+import com.youhui.mail.data.remote.readableMessage
 import com.youhui.mail.util.Formatters
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -67,14 +78,25 @@ fun MessageDetailScreen(
     uid: Long,
     folder: String,
     onBack: () -> Unit,
-    onReply: (com.youhui.mail.data.remote.dto.MessageDto) -> Unit
+    onReply: (com.youhui.mail.data.remote.dto.MessageDto) -> Unit,
+    onAi: (String) -> Unit,          // "explain" / "reply"
+    onOpenTranslationSettings: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    val clipboard = LocalClipboardManager.current
     var message by remember { mutableStateOf<MessageDto?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var aiMenuOpen by remember { mutableStateOf(false) }
+    // 翻译状态：原文需用户点「译」才会发往翻译服务
+    var translating by remember { mutableStateOf(false) }
+    var translation by remember { mutableStateOf<String?>(null) }
+    var translationProvider by remember { mutableStateOf("") }
+    var translationError by remember { mutableStateOf<String?>(null) }
+    var translationNeedsConfig by remember { mutableStateOf(false) }
+    var translationTruncated by remember { mutableStateOf(false) }
     var downloading by remember { mutableStateOf<String?>(null) } // 正在下载的附件名
     var detailRetry by remember { mutableStateOf(0) }
     // 正文 cid 内嵌图回填结果（未含超预算图时为 null，直接用原始 html）
@@ -85,6 +107,8 @@ fun MessageDetailScreen(
     LaunchedEffect(accountId, uid, folder, detailRetry) {
         cidHtml = null
         referencedInlineIndices = emptySet()
+        translating = false; translation = null; translationProvider = ""
+        translationError = null; translationNeedsConfig = false; translationTruncated = false
         try {
             val dto = serviceLocator.mailRepository().message(accountId, uid, folder)
             message = dto
@@ -123,6 +147,72 @@ fun MessageDetailScreen(
 
     LaunchedEffect(error) {
         error?.let { snackbar.showSnackbar(it); error = null }
+    }
+
+    /** 与服务端一致：优先纯文本，无纯文本时从 HTML 提取可读文本。 */
+    fun mailTextForTranslation(detail: MessageDto): String {
+        val plain = detail.text.orEmpty().trim()
+        if (plain.isNotEmpty()) return plain
+        val html = detail.html.orEmpty()
+        if (html.isBlank()) return ""
+        return html
+            .replace(Regex("(?is)<(script|style|noscript)[^>]*>.*?</\\1>"), " ")
+            .replace(Regex("(?i)<br\\s*/?>"), "\n")
+            .replace(Regex("(?i)</(p|div|li|tr|h[1-6])>"), "\n")
+            .replace(Regex("<[^>]+>"), " ")
+            .replace("&nbsp;", " ")
+            .replace("&amp;", "&")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace(Regex("[ \\t]{2,}"), " ")
+            .replace(Regex("\\n{3,}"), "\n\n")
+            .trim()
+    }
+
+    fun normalizeTranslationSpacing(value: String): String = value
+        .replace("\r\n", "\n")
+        .replace('\u00a0', ' ')
+        .split('\n').joinToString("\n") { it.trimEnd() }
+        .replace(Regex("\\n{3,}"), "\n\n")
+        .trim()
+
+    fun translateCurrent() {
+        val detail = message ?: return
+        if (translating) return
+        val source = mailTextForTranslation(detail)
+        if (source.isEmpty()) {
+            scope.launch { snackbar.showSnackbar("这封邮件没有可翻译的正文。") }
+            return
+        }
+        scope.launch {
+            translating = true
+            translationError = null
+            translationNeedsConfig = false
+            translation = null
+            try {
+                val config = serviceLocator.api().translationConfig()
+                if (!config.configured) {
+                    translationNeedsConfig = true
+                    translationError = "尚未配置翻译服务，请先在设置 → 邮件翻译中填写并保存凭据。"
+                    return@launch
+                }
+                val limit = 12_000
+                translationTruncated = source.length > limit
+                val result = serviceLocator.api().translate(TranslationReq(source.take(limit)))
+                val text = normalizeTranslationSpacing(result.translation)
+                if (text.isBlank()) {
+                    translationError = "翻译服务没有返回译文。"
+                } else {
+                    translation = text
+                    translationProvider = result.provider
+                }
+            } catch (e: Exception) {
+                translationError = e.readableMessage()
+            } finally {
+                translating = false
+            }
+        }
     }
 
     fun shareFile(path: String) {
@@ -170,6 +260,24 @@ fun MessageDetailScreen(
                 },
                 actions = {
                     if (message != null) {
+                        IconButton(onClick = { translateCurrent() }, enabled = !translating) {
+                            Icon(Icons.Filled.Translate, contentDescription = "翻译为简体中文")
+                        }
+                        IconButton(onClick = {
+                            aiMenuOpen = true
+                        }) {
+                            Icon(Icons.Filled.AutoAwesome, contentDescription = "AI 助手")
+                        }
+                        DropdownMenu(expanded = aiMenuOpen, onDismissRequest = { aiMenuOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("AI 解释这封邮件") },
+                                onClick = { aiMenuOpen = false; onAi("explain") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("AI 起草回复") },
+                                onClick = { aiMenuOpen = false; onAi("reply") }
+                            )
+                        }
                         IconButton(onClick = { message?.let(onReply) }) {
                             Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = "回复")
                         }
@@ -202,6 +310,63 @@ fun MessageDetailScreen(
                     serverUrl = serviceLocator.tokenStore.serverUrl.orEmpty(),
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
                 )
+
+                // 译文区：仅在点击「译」后出现；原文只在此刻发送给翻译服务商
+                if (translating || translation != null || translationError != null) {
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "简体中文译文",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (translation != null) {
+                                    TextButton(onClick = { clipboard.setText(AnnotatedString(translation.orEmpty())) }) {
+                                        Text("复制")
+                                    }
+                                }
+                            }
+                            when {
+                                translating -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(Modifier.size(14.dp))
+                                    Spacer(Modifier.size(8.dp))
+                                    Text(
+                                        "正在翻译…",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                translationError != null -> Column {
+                                    Text(
+                                        translationError.orEmpty(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    if (translationNeedsConfig) {
+                                        TextButton(onClick = onOpenTranslationSettings) { Text("打开翻译设置") }
+                                    }
+                                }
+                                else -> Column {
+                                    Text(
+                                        translation.orEmpty(),
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        buildString {
+                                            if (translationTruncated) append("邮件较长，本次仅发送前 12,000 个字符；")
+                                            append("由${translationProviderLabel(translationProvider)}生成，请核对译文中的日期、金额和专有名词。")
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
                 // 附件区隐藏已被正文引用（成功回填）的内嵌图，只展示真正的下载件；芯片化横排
                 val visibleAttachments = current.attachments.filterNot { it.index in referencedInlineIndices }
                 if (visibleAttachments.isNotEmpty()) {
@@ -241,6 +406,14 @@ fun MessageDetailScreen(
             }
         }
     }
+}
+
+/** 翻译服务商显示名（与服务端返回的 provider 对齐）。 */
+private fun translationProviderLabel(provider: String): String = when (provider) {
+    "niutrans" -> "小牛翻译"
+    "google" -> "Google Cloud Translation"
+    "azure" -> "Azure Translator"
+    else -> "专用翻译 API"
 }
 
 /**

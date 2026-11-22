@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "848538434225",
+    "project_id": "youmail-fde02",
+    "storage_bucket": "youmail-fde02.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:848538434225:android:2ecb393fee8106babf4090",
+        "android_client_info": {
+          "package_name": "com.youhui.mail"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBa64K2cgwN8loptaM_XkErPA6XUwDp84s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

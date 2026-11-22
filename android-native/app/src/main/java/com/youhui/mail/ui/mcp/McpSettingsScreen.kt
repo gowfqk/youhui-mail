@@ -56,6 +56,7 @@ import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.youhui.mail.util.I18n
 import com.youhui.mail.util.t
 
 private data class McpPermissionInfo(
@@ -436,7 +437,7 @@ fun McpSettingsScreen(
     rotateTarget?.let { permission ->
         AlertDialog(
             onDismissRequest = { rotateTarget = null },
-            title = { Text(t("轮换 ${permission.label} 令牌？")) },
+            title = { Text(if (I18n.lang == I18n.EN) "Rotate ${permission.label} token?" else "轮换 ${permission.label} 令牌？") },
             text = { Text(t("现有令牌会立即失效；已连接的 Agent 需要更新为新令牌。邮箱范围保持不变。")) },
             confirmButton = {
                 TextButton(onClick = {
@@ -457,7 +458,7 @@ fun McpSettingsScreen(
     revokeTarget?.let { permission ->
         AlertDialog(
             onDismissRequest = { revokeTarget = null },
-            title = { Text(t("撤销 ${permission.label} 令牌？")) },
+            title = { Text(if (I18n.lang == I18n.EN) "Revoke ${permission.label} token?" else "撤销 ${permission.label} 令牌？") },
             text = { Text(t("使用此令牌的 Agent 会立即失去对应权限；其他权限的令牌不受影响。")) },
             confirmButton = {
                 TextButton(onClick = { viewModel.revokeToken(permission.id); revokeTarget = null }) { Text(t("撤销")) }

@@ -66,6 +66,7 @@ import com.youhui.mail.data.remote.dto.AccountSummaryDto
 import com.youhui.mail.di.ServiceLocator
 import kotlinx.coroutines.launch
 import java.io.File
+import com.youhui.mail.util.I18n
 import com.youhui.mail.util.t
 
 private val identityLabels = mapOf("google" to "Google", "github" to "GitHub", "cloudflare" to "Cloudflare")
@@ -409,7 +410,7 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text(t("删除邮箱账户？")) },
-            text = { Text(t("将从工作台移除「${account.label?.takeIf { it.isNotBlank() } ?: account.email}」及其通知记录；不影响邮箱服务器上的邮件。")) },
+            text = { Text(if (I18n.lang == I18n.EN) "This removes ${account.email} and its notification records from the workbench. Mail on the server is unaffected." else "将从工作台移除「${account.label?.takeIf { it.isNotBlank() } ?: account.email}」及其通知记录；不影响邮箱服务器上的邮件。") },
             confirmButton = { TextButton(onClick = { viewModel.deleteAccount(account); pendingDelete = null }) { Text(t("删除")) } },
             dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(t("取消")) } }
         )

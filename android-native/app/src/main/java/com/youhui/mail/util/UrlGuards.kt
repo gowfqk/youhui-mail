@@ -1,4 +1,4 @@
-﻿package com.youhui.mail.util
+package com.youhui.mail.util
 
 import android.net.Uri
 import java.net.URI

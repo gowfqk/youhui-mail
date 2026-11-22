@@ -42,10 +42,27 @@ function loadRemoteImagesAfterConsent() {
   });
 }
 
+function normalizeCid(value) {
+  let cid = String(value || '').trim().replace(/^cid:/i, '').replace(/^<|>$/g, '').trim();
+  try { cid = decodeURIComponent(cid); } catch {}
+  return cid.toLowerCase();
+}
+function renderCidImage(cid, src) {
+  const target = normalizeCid(cid);
+  content.querySelectorAll('img[data-cid-src]').forEach((image) => {
+    if (normalizeCid(image.getAttribute('data-cid-src')) !== target) return;
+    image.setAttribute('src', src);
+    image.removeAttribute('data-cid-src');
+    image.addEventListener('load', scheduleHeightReport, { once: true });
+    image.addEventListener('error', scheduleHeightReport, { once: true });
+  });
+}
+
 window.addEventListener('message', (event) => {
   if (event.source !== window.parent || !event.data || typeof event.data !== 'object') return;
   if (event.data.type === 'render-email' && typeof event.data.html === 'string') renderEmail(event.data.html);
   if (event.data.type === 'load-remote-images') loadRemoteImagesAfterConsent();
+  if (event.data.type === 'render-cid-image' && typeof event.data.cid === 'string' && typeof event.data.src === 'string') renderCidImage(event.data.cid, event.data.src);
 });
 
 if ('ResizeObserver' in window) new ResizeObserver(scheduleHeightReport).observe(content);

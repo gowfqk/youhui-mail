@@ -166,7 +166,14 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '28mb' }));
-app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1h' }));
+app.use(express.static(path.join(__dirname, 'public'), {
+  index: false,
+  // 带 12 位内容摘要的文件名视为版本化资源，可长期缓存；源文件与 index.html 用 no-cache，发版即刻生效
+  setHeaders: (res, filePath) => {
+    const versioned = /^[\w.-]+-[0-9a-f]{12}\.(?:js|css|png|ico|webmanifest)$/.test(path.basename(filePath));
+    res.setHeader('Cache-Control', versioned ? 'public, max-age=31536000, immutable' : 'no-cache');
+  }
+}));
 // send 库在 Windows 含非 ASCII 字符（如中文工作空间名）的绝对路径下会误报 NotFound，
 // 改用 fs.readFile 直接读取后发送绕过；express.static 内部走相对路径拼接不受影响。
 function sendLocalFile(res, filePath, contentType) {
@@ -552,6 +559,78 @@ async function withFreshAccount(account, fn) {
   await refreshOAuth(account);
   return fn(account);
 }
+// ---------- IMAP 连接复用池 ----------
+// 每个账户保留一条空闲连接，列表、详情、操作与通知扫描直接复用，避免每次请求都重建
+// TLS + 登录。并发超出时临时开新连接，用完即关；空闲连接由 ImapFlow 的 auto-IDLE 保活
+// （autoIdleDelay 默认 15 秒，会被压在 socketTimeout 30 秒之下），超时未使用则主动关闭。
+const imapPool = new Map();
+const IMAP_POOL_IDLE_MS = 10 * 60_000;
+const mailboxListCache = new Map();
+const MAILBOX_LIST_TTL_MS = 5 * 60_000;
+function closeImapClientQuietly(client) {
+  if (!client) return;
+  try { client.logout().catch(() => { try { client.close(); } catch {} }); }
+  catch { try { client.close(); } catch {} }
+}
+function evictPooledImap(accountId, client = null) {
+  const entry = imapPool.get(accountId);
+  if (!entry || (client && entry.client !== client)) return;
+  imapPool.delete(accountId);
+  clearTimeout(entry.idleTimer);
+  closeImapClientQuietly(entry.client);
+}
+function armImapPoolIdleTimer(entry) {
+  clearTimeout(entry.idleTimer);
+  entry.idleTimer = setTimeout(() => evictPooledImap(entry.accountId, entry.client), IMAP_POOL_IDLE_MS);
+  entry.idleTimer.unref?.();
+}
+async function acquireImapLease(account) {
+  const entry = imapPool.get(account.id);
+  if (entry && !entry.busy && entry.client?.usable) {
+    clearTimeout(entry.idleTimer);
+    entry.busy = true;
+    return { accountId: account.id, client: entry.client, pooled: true };
+  }
+  if (entry && !entry.busy) evictPooledImap(account.id);
+  const client = makeImap(account);
+  try { await client.connect(); }
+  catch (error) { try { client.close(); } catch {} throw error; }
+  return { accountId: account.id, client, pooled: false };
+}
+async function releaseImapLease(lease) {
+  const client = lease?.client;
+  if (!client) return;
+  if (!client.usable) { evictPooledImap(lease.accountId, client); return; }
+  if (lease.pooled) {
+    const entry = imapPool.get(lease.accountId);
+    if (entry && entry.client === client) {
+      entry.busy = false;
+      armImapPoolIdleTimer(entry);
+      return;
+    }
+    closeImapClientQuietly(client);
+    return;
+  }
+  if (imapPool.has(lease.accountId)) { closeImapClientQuietly(client); return; }
+  // 收养为该账户的空闲连接；确保已有打开的邮箱，让 auto-IDLE 持续产生保活流量
+  const entry = { accountId: lease.accountId, client, busy: false, idleTimer: null };
+  imapPool.set(lease.accountId, entry);
+  const evict = () => evictPooledImap(lease.accountId, client);
+  client.once('error', evict);
+  client.once('close', evict);
+  armImapPoolIdleTimer(entry);
+  if (!client.mailbox) {
+    try { await client.mailboxOpen('INBOX', { readOnly: true }); }
+    catch { evictPooledImap(lease.accountId, client); }
+  }
+}
+async function withImapClient(account, fn) {
+  return withFreshAccount(account, async (fresh) => {
+    const lease = await acquireImapLease(fresh);
+    try { return await fn(lease.client); }
+    finally { await releaseImapLease(lease); }
+  });
+}
 function safeError(error) {
   const nestedErrors = Array.isArray(error?.errors) ? error.errors : [];
   const details = [error, ...nestedErrors]
@@ -610,11 +689,12 @@ function addressList(list = []) {
   return list.map((item) => ({ name: item.name || '', address: item.address || '' })).filter((x) => x.address);
 }
 async function listMailboxes(account) {
-  return withFreshAccount(account, async (fresh) => {
-    const client = makeImap(fresh);
-    try { await client.connect(); return await client.list(); }
-    finally { try { await client.logout(); } catch {} }
-  });
+  // 文件夹列表极少变化；短 TTL 缓存可免去每次列表/搜索前的 LIST 往返
+  const cached = mailboxListCache.get(account.id);
+  if (cached && cached.expiresAt > Date.now()) return cached.folders;
+  const folders = await withImapClient(account, (client) => client.list());
+  mailboxListCache.set(account.id, { folders, expiresAt: Date.now() + MAILBOX_LIST_TTL_MS });
+  return folders;
 }
 const logicalNames = {
   INBOX: ['inbox'], Sent: ['sent', 'sent items', '已发送', '已发邮件'], Drafts: ['draft', 'drafts', '草稿'],
@@ -636,72 +716,68 @@ function markMailboxSynced(accountId) {
     .run(`mailbox_last_sync:${accountId}`, String(Date.now()));
 }
 async function fetchMessages(account, folderKey, page, limit, query) {
-  return withFreshAccount(account, async (fresh) => {
-    const client = makeImap(fresh);
-    try {
-      await client.connect();
-      const mailboxes = await client.list();
-      const starredOnly = folderKey === 'Starred';
-      if (starredOnly) {
-        const allStarred = [];
-        let matched = 0;
-        for (const mailbox of mailboxes) {
-          if (mailbox.flags?.has('\\Noselect')) continue;
-          let lock;
-          try {
-            lock = await client.getMailboxLock(mailbox.path, { readOnly: true });
-            let seqs = await client.search({ flagged: true });
-            if (!Array.isArray(seqs)) continue;
-            if (query) {
-              const queryMatches = await client.search({ or: [{ from: query }, { to: query }, { subject: query }, { text: query }] });
-              const querySet = new Set(Array.isArray(queryMatches) ? queryMatches : []);
-              seqs = seqs.filter((seq) => querySet.has(seq));
-            }
-            matched += seqs.length;
-            if (!seqs.length) continue;
-            const fetched = await client.fetchAll(seqs, { uid: true, envelope: true, flags: true, internalDate: true, size: true });
-            allStarred.push(...fetched.map((item) => ({
-              accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: mailbox.path,
-              subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
-              date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
-              flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0
-            })));
-          } catch (error) { console.warn(`Starred search skipped mailbox ${mailbox.path}: ${safeError(error)}`); }
-          finally { lock?.release(); }
-        }
-        allStarred.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        const start = (page - 1) * limit;
-        markMailboxSynced(account.id);
-        return { accountId: account.id, path: '*', messages: allStarred.slice(start, start + limit), total: matched };
+  return withImapClient(account, async (client) => {
+    const mailboxes = await listMailboxes(account);
+    const starredOnly = folderKey === 'Starred';
+    if (starredOnly) {
+      const allStarred = [];
+      let matched = 0;
+      for (const mailbox of mailboxes) {
+        if (mailbox.flags?.has('\\Noselect')) continue;
+        let lock;
+        try {
+          lock = await client.getMailboxLock(mailbox.path, { readOnly: true });
+          let seqs = await client.search({ flagged: true });
+          if (!Array.isArray(seqs)) continue;
+          if (query) {
+            const queryMatches = await client.search({ or: [{ from: query }, { to: query }, { subject: query }, { text: query }] });
+            const querySet = new Set(Array.isArray(queryMatches) ? queryMatches : []);
+            seqs = seqs.filter((seq) => querySet.has(seq));
+          }
+          matched += seqs.length;
+          if (!seqs.length) continue;
+          const fetched = await client.fetchAll(seqs, { uid: true, envelope: true, flags: true, internalDate: true, size: true });
+          allStarred.push(...fetched.map((item) => ({
+            accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: mailbox.path,
+            subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
+            date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
+            flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0
+          })));
+        } catch (error) { console.warn(`Starred search skipped mailbox ${mailbox.path}: ${safeError(error)}`); }
+        finally { lock?.release(); }
       }
-      const knownKeys = ['INBOX', 'Sent', 'Drafts', 'Archive', 'Trash', 'Spam'];
-      const pathName = knownKeys.includes(folderKey) ? findFolder(mailboxes, folderKey) : folderKey;
-      if (!pathName) return { accountId: account.id, path: null, messages: [], total: 0 };
-      const lock = await client.getMailboxLock(pathName, { readOnly: true });
-      try {
-        const total = client.mailbox.exists || 0;
-        let seqs;
-        if (query) {
-          const queryTerms = { or: [{ from: query }, { to: query }, { subject: query }, { text: query }] };
-          seqs = await client.search(queryTerms);
-          if (!Array.isArray(seqs)) seqs = [];
-          seqs = seqs.slice().reverse();
-        } else seqs = total ? Array.from({ length: total }, (_, i) => total - i) : [];
-        const matched = seqs.length;
-        const start = (page - 1) * limit;
-        const pageSeqs = seqs.slice(start, start + limit);
-        if (!pageSeqs.length) return { accountId: account.id, path: pathName, messages: [], total: matched };
-        const fetched = await client.fetchAll(pageSeqs.join(','), { uid: true, envelope: true, flags: true, internalDate: true, size: true });
-        const messages = fetched.map((item) => ({
-          accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: pathName,
-          subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
-          date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
-          flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0
-        }));
-        messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-        return { accountId: account.id, path: pathName, messages, total: matched };
-      } finally { lock.release(); }
-    } finally { try { await client.logout(); } catch {} }
+      allStarred.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+      const start = (page - 1) * limit;
+      markMailboxSynced(account.id);
+      return { accountId: account.id, path: '*', messages: allStarred.slice(start, start + limit), total: matched };
+    }
+    const knownKeys = ['INBOX', 'Sent', 'Drafts', 'Archive', 'Trash', 'Spam'];
+    const pathName = knownKeys.includes(folderKey) ? findFolder(mailboxes, folderKey) : folderKey;
+    if (!pathName) return { accountId: account.id, path: null, messages: [], total: 0 };
+    const lock = await client.getMailboxLock(pathName, { readOnly: true });
+    try {
+      const total = client.mailbox.exists || 0;
+      let seqs;
+      if (query) {
+        const queryTerms = { or: [{ from: query }, { to: query }, { subject: query }, { text: query }] };
+        seqs = await client.search(queryTerms);
+        if (!Array.isArray(seqs)) seqs = [];
+        seqs = seqs.slice().reverse();
+      } else seqs = total ? Array.from({ length: total }, (_, i) => total - i) : [];
+      const matched = seqs.length;
+      const start = (page - 1) * limit;
+      const pageSeqs = seqs.slice(start, start + limit);
+      if (!pageSeqs.length) return { accountId: account.id, path: pathName, messages: [], total: matched };
+      const fetched = await client.fetchAll(pageSeqs.join(','), { uid: true, envelope: true, flags: true, internalDate: true, size: true });
+      const messages = fetched.map((item) => ({
+        accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: pathName,
+        subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
+        date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
+        flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0
+      }));
+      messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+      return { accountId: account.id, path: pathName, messages, total: matched };
+    } finally { lock.release(); }
   });
 }
 const safeInlineImageTypes = new Set(['image/png','image/jpeg','image/gif','image/webp','image/avif','image/bmp']);
@@ -724,79 +800,66 @@ function inlineImageData(attachments = []) {
   return images;
 }
 async function getMailDetail(account, folderKey, uid, { attachmentsMeta = false } = {}) {
-  return withFreshAccount(account, async (fresh) => {
-    const client = makeImap(fresh);
+  return withImapClient(account, async (client) => {
+    const pathName = folderKey || 'INBOX';
+    const lock = await client.getMailboxLock(pathName);
     try {
-      await client.connect();
-      const mailboxes = await client.list();
-      const pathName = folderKey || 'INBOX';
-      const lock = await client.getMailboxLock(pathName);
-      try {
-        const item = await client.fetchOne(Number(uid), { uid: true, source: true, envelope: true, flags: true, internalDate: true }, { uid: true });
-        if (!item?.source) throw new Error('找不到这封邮件，可能已被移走或删除。');
-        try { await client.messageFlagsAdd(Number(uid), ['\\Seen'], { uid: true }); } catch {}
-        const parsed = await simpleParser(item.source);
-        const inlineImages = inlineImageData(parsed.attachments || []);
-        const cleanHtml = parsed.html ? sanitizeEmailHtml(String(parsed.html), inlineImages) : '';
-        return {
-          accountId: account.id, email: account.email, uid: item.uid, folder: pathName,
-          subject: parsed.subject || item.envelope?.subject || '(无主题)', from: (parsed.from?.value || messageAddress(item.envelope, 'from')),
-          to: parsed.to?.value || messageAddress(item.envelope, 'to'), cc: parsed.cc?.value || messageAddress(item.envelope, 'cc'),
-          date: parsed.date || item.internalDate || null, text: parsed.text || '', html: cleanHtml,
-          messageId: parsed.messageId || '', inReplyTo: parsed.inReplyTo || '', references: parsed.references || '',
-          attachments: (parsed.attachments || []).map((a, index) => ({
-            index, filename: a.filename || 'attachment', contentType: a.contentType || 'application/octet-stream',
-            size: a.size || a.content?.length || 0, contentId: a.contentId || '',
-            inline: safeInlineImageTypes.has(String(a.contentType || '').split(';')[0].trim().toLowerCase()),
-            ...(attachmentsMeta ? {} : { content: a.content?.toString('base64') || '' })
-          }))
-        };
-      } finally { lock.release(); }
-    } finally { try { await client.logout(); } catch {} }
+      const item = await client.fetchOne(Number(uid), { uid: true, source: true, envelope: true, flags: true, internalDate: true }, { uid: true });
+      if (!item?.source) throw new Error('找不到这封邮件，可能已被移走或删除。');
+      try { await client.messageFlagsAdd(Number(uid), ['\\Seen'], { uid: true }); } catch {}
+      const parsed = await simpleParser(item.source);
+      const inlineImages = inlineImageData(parsed.attachments || []);
+      const cleanHtml = parsed.html ? sanitizeEmailHtml(String(parsed.html), inlineImages) : '';
+      return {
+        accountId: account.id, email: account.email, uid: item.uid, folder: pathName,
+        subject: parsed.subject || item.envelope?.subject || '(无主题)', from: (parsed.from?.value || messageAddress(item.envelope, 'from')),
+        to: parsed.to?.value || messageAddress(item.envelope, 'to'), cc: parsed.cc?.value || messageAddress(item.envelope, 'cc'),
+        date: parsed.date || item.internalDate || null, text: parsed.text || '', html: cleanHtml,
+        messageId: parsed.messageId || '', inReplyTo: parsed.inReplyTo || '', references: parsed.references || '',
+        attachments: (parsed.attachments || []).map((a, index) => ({
+          index, filename: a.filename || 'attachment', contentType: a.contentType || 'application/octet-stream',
+          size: a.size || a.content?.length || 0, contentId: a.contentId || '',
+          inline: safeInlineImageTypes.has(String(a.contentType || '').split(';')[0].trim().toLowerCase()),
+          ...(attachmentsMeta ? {} : { content: a.content?.toString('base64') || '' })
+        }))
+      };
+    } finally { lock.release(); }
   });
 }
 async function getMailAttachment(account, folderKey, uid, index) {
   // v1：整封读入内存后取指定附件；后续可升级为 IMAP partial fetch 流式抓取
-  return withFreshAccount(account, async (fresh) => {
-    const client = makeImap(fresh);
+  return withImapClient(account, async (client) => {
+    const pathName = folderKey || 'INBOX';
+    const lock = await client.getMailboxLock(pathName);
     try {
-      await client.connect();
-      const pathName = folderKey || 'INBOX';
-      const lock = await client.getMailboxLock(pathName);
-      try {
-        const item = await client.fetchOne(Number(uid), { uid: true, source: true }, { uid: true });
-        if (!item?.source) throw new Error('找不到这封邮件，可能已被移走或删除。');
-        const parsed = await simpleParser(item.source);
-        const attachment = (parsed.attachments || [])[index];
-        if (!attachment?.content) throw new Error('附件不存在或已被移除。');
-        return attachment;
-      } finally { lock.release(); }
-    } finally { try { await client.logout(); } catch {} }
+      const item = await client.fetchOne(Number(uid), { uid: true, source: true }, { uid: true });
+      if (!item?.source) throw new Error('找不到这封邮件，可能已被移走或删除。');
+      const parsed = await simpleParser(item.source);
+      const attachment = (parsed.attachments || [])[index];
+      if (!attachment?.content) throw new Error('附件不存在或已被移除。');
+      return attachment;
+    } finally { lock.release(); }
   });
 }
 async function mutateMessage(account, folder, uid, action) {
-  return withFreshAccount(account, async (fresh) => {
-    const client = makeImap(fresh);
+  return withImapClient(account, async (client) => {
+    const mailboxes = await listMailboxes(account);
+    const lock = await client.getMailboxLock(folder || 'INBOX');
     try {
-      await client.connect();
-      const mailboxes = await client.list();
-      const lock = await client.getMailboxLock(folder || 'INBOX');
-      try {
-        const id = Number(uid);
-        if (!Number.isInteger(id) || id < 1) throw new Error('邮件编号无效。');
-        if (action === 'read') await client.messageFlagsAdd(id, ['\\Seen'], { uid: true });
-        else if (action === 'unread') await client.messageFlagsRemove(id, ['\\Seen'], { uid: true });
-        else if (action === 'star') await client.messageFlagsAdd(id, ['\\Flagged'], { uid: true });
-        else if (action === 'unstar') await client.messageFlagsRemove(id, ['\\Flagged'], { uid: true });
-        else if (action === 'archive' || action === 'delete') {
-          const dest = findFolder(mailboxes, action === 'archive' ? 'Archive' : 'Trash');
-          if (dest && dest !== folder) await client.messageMove(id, dest, { uid: true });
-          else if (action === 'delete') await client.messageFlagsAdd(id, ['\\Deleted'], { uid: true });
-          else throw new Error('此邮箱没有可识别的归档文件夹。');
-        } else throw new Error('不支持此邮件操作。');
-        return { ok: true };
-      } finally { lock.release(); }
-    } finally { try { await client.logout(); } catch {} }
+      const id = Number(uid);
+      if (!Number.isInteger(id) || id < 1) throw new Error('邮件编号无效。');
+      if (action === 'read') await client.messageFlagsAdd(id, ['\\Seen'], { uid: true });
+      else if (action === 'unread') await client.messageFlagsRemove(id, ['\\Seen'], { uid: true });
+      else if (action === 'star') await client.messageFlagsAdd(id, ['\\Flagged'], { uid: true });
+      else if (action === 'unstar') await client.messageFlagsRemove(id, ['\\Flagged'], { uid: true });
+      else if (action === 'archive' || action === 'delete') {
+        const dest = findFolder(mailboxes, action === 'archive' ? 'Archive' : 'Trash');
+        if (dest && dest !== folder) await client.messageMove(id, dest, { uid: true });
+        else if (action === 'delete') await client.messageFlagsAdd(id, ['\\Deleted'], { uid: true });
+        else throw new Error('此邮箱没有可识别的归档文件夹。');
+      } else throw new Error('不支持此邮件操作。');
+      return { ok: true };
+    } finally { lock.release(); }
   });
 }
 function getStatus(req) {
@@ -1238,12 +1301,9 @@ function hasActivePushDevice() {
     WHERE s.expires_at>? LIMIT 1`).get(Date.now()));
 }
 async function scanAccountForNotifications(account, config) {
-  return withFreshAccount(account, async (fresh) => {
-    const client = makeImap(fresh);
+  return withImapClient(account, async (client) => {
+    const lock = await client.getMailboxLock('INBOX', { readOnly: true });
     try {
-      await client.connect();
-      const lock = await client.getMailboxLock('INBOX', { readOnly:true });
-      try {
         const mailbox = client.mailbox || {};
         const validity = String(mailbox.uidValidity || '');
         const highest = Math.max(0, Number(mailbox.uidNext || 1) - 1);
@@ -1292,8 +1352,7 @@ async function scanAccountForNotifications(account, config) {
         }
         db.prepare('UPDATE notification_checkpoints SET highest_uid = ?, updated_at = ? WHERE account_id = ?').run(end, Date.now(), account.id);
         return count;
-      } finally { lock.release(); }
-    } finally { try { await client.logout(); } catch {} }
+    } finally { lock.release(); }
   });
 }
 const notificationIdleMonitors = new Map();
@@ -1892,6 +1951,8 @@ app.delete('/api/accounts/:id', auth, (req, res) => {
   const result = db.prepare('DELETE FROM accounts WHERE id = ?').run(req.params.id);
   if (!result.changes) return res.status(404).json({ error: '找不到此邮箱账户。' });
   stopNotificationIdle(req.params.id);
+  evictPooledImap(req.params.id);
+  mailboxListCache.delete(req.params.id);
   db.prepare('DELETE FROM app_preferences WHERE key = ? AND value = ?').run('default_account_id', req.params.id);
   db.prepare('DELETE FROM notification_checkpoints WHERE account_id=?').run(req.params.id);
   db.prepare('DELETE FROM notification_events WHERE account_id=?').run(req.params.id);
@@ -2019,17 +2080,15 @@ app.post('/api/send', auth, async (req, res) => {
         });
       } finally { transport.close(); }
       let sentCopySaved = false;
-      const imap = makeImap(fresh);
       try {
-        await imap.connect();
-        const sentFolder = findFolder(await imap.list(), 'Sent');
-        if (sentFolder) {
+        sentCopySaved = await withImapClient(fresh, async (imap) => {
+          const sentFolder = findFolder(await listMailboxes(fresh), 'Sent');
+          if (!sentFolder) return false;
           const source = rawSentMessage({ email:fresh.email, label:fresh.label, to, cc, subject, text:body, messageId, inReplyTo, references, attachments });
           await imap.append(sentFolder, source, ['\\Seen']);
-          sentCopySaved = true;
-        }
+          return true;
+        });
       } catch (error) { console.error('Sent copy save:', safeError(error)); }
-      finally { try { await imap.logout(); } catch {} }
       return { sentCopySaved };
     });
     res.json({ ok: true, sentCopySaved: sendResult.sentCopySaved, message: '邮件已发送。', warning: sendResult.sentCopySaved ? '' : '邮件已发送，但此邮箱的“已发送”副本未能自动保存。' });
@@ -2047,17 +2106,15 @@ async function sendMcpMail(account, { to, cc = '', bcc = '', subject = '', text 
       });
     } finally { transport.close(); }
     let sentCopySaved = false;
-    const imap = makeImap(fresh);
     try {
-      await imap.connect();
-      const sentFolder = findFolder(await imap.list(), 'Sent');
-      if (sentFolder) {
+      sentCopySaved = await withImapClient(fresh, async (imap) => {
+        const sentFolder = findFolder(await listMailboxes(fresh), 'Sent');
+        if (!sentFolder) return false;
         const source = rawSentMessage({ email: fresh.email, label: fresh.label, to, cc, subject, text, messageId });
         await imap.append(sentFolder, source, ['\\Seen']);
-        sentCopySaved = true;
-      }
+        return true;
+      });
     } catch (error) { console.error('MCP sent copy save:', safeError(error)); }
-    finally { try { await imap.logout(); } catch {} }
     return {
       ok: true, sentCopySaved, message: '邮件已发送。',
       warning: sentCopySaved ? '' : '邮件已发送，但此邮箱的“已发送”副本未能自动保存。'
@@ -2270,7 +2327,12 @@ app.get('/api/oauth/:provider/start', auth, (req, res) => {
 });
 attachAI({ app, auth, db, encrypt, decrypt, mapAccount, withFreshAccount, makeImap, simpleParser });
 attachMcp({ app, auth, db, hash, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage: sendMcpMail, safeError });
-app.get('*path', (req, res) => sendLocalFile(res, path.join(__dirname, 'public', 'index.html'), 'text/html; charset=utf-8'));
+app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在。' }));
+app.get('*path', (req, res) => {
+  // index.html 不缓存，保证发版后浏览器立即拿到新的资源引用
+  res.setHeader('Cache-Control', 'no-cache');
+  sendLocalFile(res, path.join(__dirname, 'public', 'index.html'), 'text/html; charset=utf-8');
+});
 app.use((error, req, res, next) => {
   console.error(error);
   if (res.headersSent) return next(error);
@@ -2280,8 +2342,24 @@ app.use((error, req, res, next) => {
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || '0.0.0.0';
-app.listen(port, host, () => {
+const server = app.listen(port, host, () => {
   console.log(`邮汇邮件工作台已启动：http://${host}:${port}`);
   scheduleNotificationSweep(5000);
   if (!process.env.APP_BASE_URL) console.log('提示：设置 OAuth 时请配置 APP_BASE_URL 为此应用的公开 HTTPS 地址。');
 });
+
+// 优雅退出：停止监听并释放 IMAP IDLE 与池化连接，给在途请求 3 秒收尾后强制退出
+let shutdownStarted = false;
+function shutdownWorkbench(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  console.log(`收到 ${signal}，正在关闭邮汇工作台…`);
+  try { server.close(); } catch {}
+  try { clearTimeout(notificationSweepTimer); notificationSweepTimer = null; } catch {}
+  for (const accountId of [...notificationIdleMonitors.keys()]) stopNotificationIdle(accountId);
+  for (const accountId of [...imapPool.keys()]) evictPooledImap(accountId);
+  // 1.5 秒收尾窗口：兼容移动端测试 2 秒的 SIGKILL 前提，也给 Docker stop 留出余量
+  setTimeout(() => process.exit(0), 1500);
+}
+process.once('SIGTERM', () => shutdownWorkbench('SIGTERM'));
+process.once('SIGINT', () => shutdownWorkbench('SIGINT'));

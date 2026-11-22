@@ -488,6 +488,11 @@ function renderDetailPlaceholder() {
   pane.innerHTML = '<div class="detail-placeholder"><div class="placeholder-icon">✉</div><h2>选一封邮件开始阅读</h2><p>你的邮件会安全地从对应邮箱实时读取。</p></div>';
 }
 function addressText(list = []) { return list.map((x) => x.name ? `${x.name} <${x.address}>` : x.address).join(', '); }
+function normalizeClientCid(value = '') {
+  let cid = String(value || '').trim().replace(/^cid:/i, '').replace(/^<|>$/g, '').trim();
+  try { cid = decodeURIComponent(cid); } catch {}
+  return cid.toLowerCase();
+}
 async function openMessage(index) {
   const message = state.messages[index]; if (!message) return;
   state.selected = message; state.detail = null; updateAIControls(); renderMessages();
@@ -496,7 +501,8 @@ async function openMessage(index) {
   pane.scrollTop = 0;
   pane.innerHTML = '<div class="loading"><span class="spinner"></span>正在读取邮件正文…</div>';
   try {
-    const params = new URLSearchParams({ folder:message.folder || state.folder });
+    // attachments=meta：只取附件元数据；附件与超预算的内嵌图按需从附件端点获取
+    const params = new URLSearchParams({ folder:message.folder || state.folder, attachments:'meta' });
     const detail = await api(`/api/message/${encodeURIComponent(message.accountId)}/${message.uid}?${params}`);
     state.detail = detail; message.unread = false; renderMessages(); renderDetail(detail, message); updateAIControls();
   } catch (error) { pane.innerHTML = `<div class="detail-placeholder"><div class="placeholder-icon">!</div><h2>邮件读取失败</h2><p>${escapeHtml(error.message)}</p><button class="button button-quiet detail-back">返回</button></div>`; $('.detail-back', pane)?.addEventListener('click', closeDetailMobile); }
@@ -516,7 +522,7 @@ function renderDetail(detail, message) {
     <div class="detail-divider"></div>
     <div class="mail-body" id="mailBody"></div>
     <section id="mailTranslation" class="mail-translation hidden" aria-live="polite" aria-label="简体中文译文"></section>
-    ${detail.attachments?.length ? `<div class="attachment-list">${detail.attachments.map((a,i)=>`<a class="attachment-link" download="${escapeHtml(a.filename)}" href="data:${escapeHtml(a.contentType)};base64,${a.content}"><span class="attachment-icon">⌑</span><span>${escapeHtml(a.filename)}<br><small>${escapeHtml(formatSize(a.size))}</small></span></a>`).join('')}</div>`:''}
+    ${detail.attachments?.length ? `<div class="attachment-list">${detail.attachments.map((a,i)=>`<a class="attachment-link" download="${escapeHtml(a.filename)}" href="/api/message/${encodeURIComponent(detail.accountId)}/${encodeURIComponent(message.uid)}/attachment/${i}?folder=${encodeURIComponent(message.folder || state.folder)}"><span class="attachment-icon">⌑</span><span>${escapeHtml(a.filename)}<br><small>${escapeHtml(formatSize(a.size))}</small></span></a>`).join('')}</div>`:''}
     <div class="detail-account-tag"><span class="status-dot"></span>${escapeHtml(account?.label || account?.email || detail.email)} · 原始邮箱</div>
     <div class="detail-actions-bottom"><button class="button button-primary" data-action="reply">↶ 回复</button></div>
   </article>`;
@@ -533,8 +539,30 @@ function renderDetail(detail, message) {
     frame.referrerPolicy = 'no-referrer';
     frame.height = '320';
     frame.src = '/mail-frame';
+    // 超出内联预算的 cid 图片在服务端被标记为 data-cid-src；这里按需取回后回填到沙箱内
+    const attachmentByCid = new Map();
+    for (const item of detail.attachments || []) {
+      if (item.inline && item.contentId) attachmentByCid.set(normalizeClientCid(item.contentId), item);
+    }
+    const pendingCids = [...inertTemplate.content.querySelectorAll('img[data-cid-src]')]
+      .map((image) => normalizeClientCid(image.getAttribute('data-cid-src')))
+      .filter((cid, index, all) => cid && all.indexOf(cid) === index && attachmentByCid.has(cid));
+    const resolveInlineImages = async () => {
+      const folder = message.folder || state.folder;
+      for (const cid of pendingCids) {
+        const index = (detail.attachments || []).indexOf(attachmentByCid.get(cid));
+        try {
+          const response = await fetch(`/api/message/${encodeURIComponent(detail.accountId)}/${encodeURIComponent(message.uid)}/attachment/${index}?folder=${encodeURIComponent(folder)}&disposition=inline`, { credentials: 'same-origin' });
+          if (!response.ok) continue;
+          const blob = await response.blob();
+          const src = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error('inline image read failed')); reader.readAsDataURL(blob); });
+          frame.contentWindow?.postMessage({ type: 'render-cid-image', cid, src }, '*');
+        } catch {}
+      }
+    };
     frame.addEventListener('load', () => {
       frame.contentWindow?.postMessage({ type: 'render-email', html: emailHtml }, '*');
+      void resolveInlineImages();
     }, { once: true });
     if (remoteImageCount) {
       const notice = document.createElement('div'); notice.className = 'remote-image-notice';

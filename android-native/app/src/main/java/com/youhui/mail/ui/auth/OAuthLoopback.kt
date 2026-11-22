@@ -39,12 +39,21 @@ object OAuthLoopback {
         val redirectUri = "http://127.0.0.1:${server.localPort}/callback"
         val callback = CompletableDeferred<Uri>()
 
-        // 回环接收线程：把第一个含 code 的 GET /callback 上报，并回一份静态完成页
+        // 回环接收线程：把第一个含 code 的 GET /callback 上报，并回一份静态完成页。
+        // soTimeout 的 3 秒是预期内的轮询超时（用于周期性检查回调是否已完成），
+        // 必须继续循环而不是退出——否则监听在启动 3 秒后就无人 accept，
+        // 浏览器的回调连接会一直挂在 TCP 握手上，用户停留在回调页无法返回 App。
         val acceptThread = Thread {
             try {
                 server.soTimeout = 3_000
                 while (!callback.isCompleted) {
-                    val socket = try { server.accept() } catch (ignored: Exception) { break }
+                    val socket = try {
+                        server.accept()
+                    } catch (timeout: java.net.SocketTimeoutException) {
+                        continue
+                    } catch (ignored: Exception) {
+                        break // server 被 finally 关闭等真实错误
+                    }
                     runCatching {
                         socket.use { s ->
                             val reader = BufferedReader(InputStreamReader(s.getInputStream(), Charsets.US_ASCII))

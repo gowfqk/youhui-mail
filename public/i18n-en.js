@@ -1,6 +1,9 @@
 // 英文词典：键为中文原文（与 DOM 文本/属性/JS 字面量逐字一致），值为英文。
 // 由 app.js 的 applyI18nDom()（静态 DOM 遍历）与 L()（动态字符串）消费。
 window.YouhuiI18n = { en: {
+// ---- MCP 配置 ----
+'MCP 配置已复制。请粘贴到 MCP 客户端的 mcpServers 设置中。': 'MCP config copied. Paste it into your MCP client mcpServers settings.',
+'MCP 配置已复制。': 'MCP config copied.',
 // ---- 品牌 / 全局 ----
 '邮汇 · 邮箱工作台': 'Youhui · Mail Workbench',
 '邮汇': 'Youhui',

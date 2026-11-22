@@ -1141,6 +1141,9 @@ $('#mcpPermissionRows').addEventListener('click', async (event) => {
       $('#mcpTokenValue').value = result.token;
       $('#mcpTokenScope').textContent = `${L(mcpPermissionDefinitions.find((item)=>item.id===permission)?.label || 'MCP')}${L('新令牌')}`;
       $('#mcpTokenReveal').classList.remove('hidden'); mcpTokenRevealPermission = permission;
+      const endpoint = state.mcpConfig?.endpoint || `${location.origin}/mcp`;
+      const mcpJson = JSON.stringify({ mcpServers: { 'youhui-mail': { url: endpoint, headers: { Authorization: `Bearer ${result.token}` } } } }, null, 2);
+      $('#mcpConfigPreview').textContent = mcpJson;
       status.textContent = L('令牌仅显示这一次；请复制到可信任的 Agent 配置中。关闭设置后无法再次查看。');
     } else if (action === 'save-scope') {
       const result = await api(`/api/mcp/token/${encodeURIComponent(permission)}/scope`, { method:'POST', body:JSON.stringify({ accountIds }) });
@@ -1167,6 +1170,18 @@ $('#copyMcpToken').addEventListener('click', async () => {
     $('#mcpTokenValue').focus(); $('#mcpTokenValue').select();
     $('#mcpSettingsStatus').textContent = L('无法自动复制；已选中令牌，请使用设备的复制操作。');
     $('#mcpSettingsStatus').classList.remove('error');
+  }
+});
+$('#copyMcpConfig').addEventListener('click', async () => {
+  const config = $('#mcpConfigPreview')?.textContent;
+  if (!config) return;
+  try {
+    await navigator.clipboard.writeText(config);
+    $('#mcpSettingsStatus').textContent = L('MCP 配置已复制。请粘贴到 MCP 客户端的 mcpServers 设置中。');
+    $('#mcpSettingsStatus').classList.remove('error');
+  } catch {
+    const range = document.createRange(); range.selectNodeContents($('#mcpConfigPreview'));
+    getSelection().removeAllRanges(); getSelection().addRange(range);
   }
 });
 function renderMcpApprovals() {

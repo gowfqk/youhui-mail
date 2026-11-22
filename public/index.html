@@ -8,13 +8,14 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/youhui-favicon-32-db585dae104d.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/youhui-touch-icon-b222de5879d2.png">
   <link rel="manifest" href="/youhui-site-4b9015c3c807.webmanifest">
+  <script>try{var _t=localStorage.getItem('youhui_theme');if(_t==='dark'||(!_t&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.setAttribute('data-theme','dark')}catch(e){}</script>
   <title>邮汇 · 邮箱工作台</title>
   <link rel="stylesheet" href="/style-ccba11f83c9c.css">
   <link rel="stylesheet" href="/brand-icon-8631112507a5.css">
   <script src="/mail-list-cache-ac9b47cad340.js" defer></script>
   <script src="/message-context-actions-d7ff3ca0c130.js" defer></script>
-  <script src="/i18n-en-d03c44063c14.js" defer></script>
-  <script src="/app-717f0e2ac9d7.js" defer></script>
+  <script src="/i18n-en-fad3892dcb96.js" defer></script>
+  <script src="/app-fffcd46c0daf.js" defer></script>
 </head>
 <body>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -76,8 +77,9 @@
         <div class="topbar-actions">
           <div class="search-box"><span class="search-icon">⌕</span><input id="searchInput" type="search" placeholder="搜索邮件、发件人…" autocomplete="off"><kbd>↵</kbd></div>
           <button id="refreshButton" class="icon-button refresh-button" title="刷新邮件" aria-label="刷新邮件">⟳</button>
-          <button id="langToggle" type="button" class="icon-button" data-lang-toggle title="Language / 语言">EN</button>
-          <button id="aiToggleButton" class="ai-launcher" type="button" aria-controls="aiChatPanel" aria-expanded="false"><span aria-hidden="true">✦</span><span>AI 助手</span></button>
+  <button id="langToggle" type="button" class="icon-button" data-lang-toggle title="Language / 语言">EN</button>
+  <button id="themeToggle" type="button" class="icon-button" data-theme-toggle title="Dark / Light mode">🌙</button>
+  <button id="aiToggleButton" class="ai-launcher" type="button" aria-controls="aiChatPanel" aria-expanded="false"><span aria-hidden="true">✦</span><span>AI 助手</span></button>
           <button id="topAddButton" class="top-add-button"><span>＋</span> 添加邮箱</button>
         </div>
       </header>

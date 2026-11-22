@@ -2018,6 +2018,27 @@ app.get('/api/message/:accountId/:uid', auth, async (req, res) => {
     res.json(await getMailDetail(account, String(req.query.folder || 'INBOX').slice(0, 200), req.params.uid, { attachmentsMeta }));
   } catch (error) { res.status(400).json({ error: safeError(error) }); }
 });
+app.get('/api/message/:accountId/:uid/eml', auth, async (req, res) => {
+  try {
+    const account = getAccount(req.params.accountId);
+    if (!account) return res.status(404).json({ error: '找不到此邮箱账户。' });
+    const uid = Number(req.params.uid);
+    const folder = String(req.query.folder || 'INBOX').slice(0, 200);
+    return withImapClient(account, async (client) => {
+      const lock = await client.getMailboxLock(folder);
+      try {
+        const item = await client.fetchOne(uid, { uid: true, source: true }, { uid: true });
+        if (!item?.source) throw new Error('找不到这封邮件，可能已被移走或删除。');
+        const filename = `${(item.envelope?.subject || 'message').replace(/[^\w\u4e00-\u9fff]/g, '_').substring(0, 80)}.eml`;
+        res.setHeader('Content-Type', 'message/rfc822');
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+        res.setHeader('Cache-Control', 'no-store, private');
+        res.setHeader('Content-Length', String(item.source.length));
+        return res.send(item.source);
+      } finally { lock.release(); }
+    });
+  } catch (error) { if (!res.headersSent) res.status(400).json({ error: safeError(error) }); }
+});
 app.get('/api/message/:accountId/:uid/attachment/:index', auth, async (req, res) => {
   try {
     const account = getAccount(req.params.accountId);

@@ -19,10 +19,15 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.StarOutline
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -152,14 +157,40 @@ fun InboxScreen(
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                         items(state.messages, key = { Triple(it.accountId, it.folder ?: "", it.uid) }) { item ->
-                            MailRow(
-                                item = item,
-                                onClick = {
-                                    viewModel.performAction(item, "read")
-                                    onOpenMessage(item.accountId, item.uid, item.folder ?: "INBOX")
-                                },
-                                onToggleStar = { viewModel.performAction(item, if (item.flagged) "unstar" else "star") }
+                            val dismissState = rememberSwipeToDismissBoxState(
+                                confirmValueChange = { value ->
+                                    when (value) {
+                                        SwipeToDismissBoxValue.StartToEnd -> { viewModel.performAction(item, "archive"); true }
+                                        SwipeToDismissBoxValue.EndToStart -> { viewModel.performAction(item, "delete"); true }
+                                        else -> false
+                                    }
+                                }
                             )
+                            SwipeToDismissBox(
+                                state = dismissState,
+                                enableDismissFromStartToEnd = state.folder == "INBOX",
+                                backgroundContent = {
+                                    val (icon, color, alignment) = when (dismissState.dismissDirection) {
+                                        SwipeToDismissBoxValue.StartToEnd -> Triple(Icons.Filled.Archive, MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer, Alignment.CenterStart)
+                                        else -> Triple(Icons.Filled.Delete, MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer, Alignment.CenterEnd)
+                                    }
+                                    Box(
+                                        Modifier.fillMaxSize().background(color.first).padding(horizontal = 24.dp),
+                                        contentAlignment = alignment
+                                    ) {
+                                        Icon(icon, contentDescription = null, tint = color.second)
+                                    }
+                                }
+                            ) {
+                                MailRow(
+                                    item = item,
+                                    onClick = {
+                                        viewModel.performAction(item, "read")
+                                        onOpenMessage(item.accountId, item.uid, item.folder ?: "INBOX")
+                                    },
+                                    onToggleStar = { viewModel.performAction(item, if (item.flagged) "unstar" else "star") }
+                                )
+                            }
                         }
                         if (state.loadingMore) {
                             item {

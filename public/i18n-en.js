@@ -555,6 +555,8 @@ window.YouhuiI18n = { en: {
 // ---- 上下文菜单动作（message-context-actions）----
 '归档这封邮件？': 'Archive this message?',
 '移到垃圾箱？': 'Move to Trash?',
+// ---- EML 导出 ----
+'导出为 .eml 文件': 'Export as .eml file',
 // ---- 覆盖检查补齐 ----
 '登录密码只用于解锁此工作台。': 'The password only unlocks this workbench.',
 '其他文件夹': 'Other folders',

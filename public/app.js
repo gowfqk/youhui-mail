@@ -45,8 +45,37 @@ function toggleLanguage() {
   try { localStorage.setItem('youhui_lang', I18N_LANG === 'en' ? 'zh' : 'en'); } catch {}
   location.reload();
 }
+// ---- 键盘快捷键：j/k 上下选择、Enter 打开、a 归档、x 删、s 星标、c 写信、/ 搜索、Esc 返回 ----
+document.addEventListener('keydown', (event) => {
+  if (event.target.matches('input,textarea,select,[contenteditable]') || event.ctrlKey || event.metaKey || event.altKey) return;
+  if (!$('#appView') || $('#appView').classList.contains('hidden')) return;
+  const rows = state.messages;
+  const idx = rows.findIndex((m) => sameMessage(m, state.selected));
+  const next = (delta) => {
+    const target = rows[Math.max(0, Math.min(rows.length - 1, idx + delta))];
+    if (target) { state.selected = target; renderMessages(); }
+  };
+  switch (event.key) {
+    case 'j': case 'ArrowDown': event.preventDefault(); next(1); break;
+    case 'k': case 'ArrowUp': event.preventDefault(); next(-1); break;
+    case 'Enter': if (idx >= 0) { event.preventDefault(); openMessage(idx); } break;
+    case 'a': if (idx >= 0) { event.preventDefault(); performMessageAction('archive', rows[idx]); } break;
+    case 'x': if (idx >= 0) { event.preventDefault(); performMessageAction('delete', rows[idx]); } break;
+    case 's': if (idx >= 0) { event.preventDefault(); performMessageAction(rows[idx].flagged ? 'unstar' : 'star', rows[idx]); } break;
+    case 'c': event.preventDefault(); openCompose(); break;
+    case '/': event.preventDefault(); $('#searchInput').focus(); break;
+    case 'Escape': if (state.selected) { state.selected = null; state.detail = null; renderDetailPlaceholder(); renderMessages(); } break;
+  }
+});
 document.addEventListener('click', (event) => {
   if (event.target.closest('[data-lang-toggle]')) toggleLanguage();
+  if (event.target.closest('[data-theme-toggle]')) {
+    const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+    const next = current === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('youhui_theme', next); } catch {}
+    document.querySelectorAll('[data-theme-toggle]').forEach((b) => { b.textContent = next === 'dark' ? '☀️' : '🌙'; });
+  }
 });
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -572,7 +601,7 @@ function renderDetail(detail, message) {
   pane.innerHTML = `<article class="detail-view">
     <div class="detail-toolbar"><button class="icon-button detail-back" data-action="back" aria-label="${L('返回邮件列表')}" title="${L('返回')}">←</button><div class="detail-actions">
       <button class="icon-button" data-action="archive" title="${L('归档')}" aria-label="${L('归档')}">▣</button><button class="icon-button" data-action="delete" title="${L('移到已删除')}" aria-label="${L('移到已删除')}">⌫</button>
-      <button class="icon-button" data-action="${message.unread?'read':'unread'}" title="${message.unread?L('标为已读'):L('标为未读')}" aria-label="${message.unread?L('标为已读'):L('标为未读')}">◉</button><button class="icon-button" data-action="${message.flagged?'unstar':'star'}" title="${message.flagged?L('取消星标'):L('加星标')}" aria-label="${message.flagged?L('取消星标'):L('加星标')}">${message.flagged?'★':'☆'}</button><button class="icon-button" data-action="translate" title="${L('使用已配置的专用翻译 API 翻译为简体中文')}" aria-label="${L('翻译为简体中文')}">译</button>
+      <button class="icon-button" data-action="${message.unread?'read':'unread'}" title="${message.unread?L('标为已读'):L('标为未读')}" aria-label="${message.unread?L('标为已读'):L('标为未读')}">◉</button><button class="icon-button" data-action="${message.flagged?'unstar':'star'}" title="${message.flagged?L('取消星标'):L('加星标')}" aria-label="${message.flagged?L('取消星标'):L('加星标')}">${message.flagged?'★':'☆'}</button><button class="icon-button" data-action="translate" title="${L('使用已配置的专用翻译 API 翻译为简体中文')}" aria-label="${L('翻译为简体中文')}">译</button><button class="icon-button" data-action="eml" title="${L('导出为 .eml 文件')}" aria-label="${L('导出为 .eml 文件')}">⬇</button>
     </div><button class="icon-button" data-action="refresh" title="${L('刷新邮件')}">⟳</button></div>
     <h1 class="detail-subject">${escapeHtml(detail.subject || L('(无主题)'))}</h1>
     <div class="sender-meta"><span class="sender-avatar ${colorClass(detail.from?.[0]?.address || sender)}">${escapeHtml(initials(sender))}</span><div class="sender-info"><div class="sender-info-main"><strong>${escapeHtml(sender)}</strong><span>&lt;${escapeHtml(detail.from?.[0]?.address || '')}&gt;</span></div><div class="sender-detail-line">${L('发给 ')}${escapeHtml(to)}${detail.cc?.length ? ` · ${L('抄送 ')}${escapeHtml(addressText(detail.cc))}` : ''}</div></div><time class="detail-date">${escapeHtml(dateLong(detail.date))}</time></div>
@@ -640,6 +669,11 @@ async function handleDetailAction(action, message, detail) {
   if (action === 'back') return closeDetailMobile();
   if (action === 'refresh') return openMessage(state.messages.findIndex((m) => m.uid === message.uid && m.accountId === message.accountId));
   if (action === 'translate') return translateEmail(detail);
+  if (action === 'eml') {
+    const folder = message.folder || state.folder;
+    window.open(`/api/message/${encodeURIComponent(detail.accountId)}/${encodeURIComponent(message.uid)}/eml?folder=${encodeURIComponent(folder)}`, '_blank');
+    return;
+  }
   if (action === 'reply') return openCompose({ accountId:detail.accountId, to:detail.from?.[0]?.address || '', subject:/^re:/i.test(detail.subject)?detail.subject:`Re: ${detail.subject}`, inReplyTo:detail.messageId || detail.inReplyTo, references:[detail.references,detail.messageId].filter(Boolean).join(' '), quoted:`\n\n—— 原邮件 ——\n${detail.text || '[HTML 邮件内容]'}\n` });
   if (['read', 'unread', 'star', 'unstar', 'archive', 'delete'].includes(action)) return performMessageAction(action, message);
 }

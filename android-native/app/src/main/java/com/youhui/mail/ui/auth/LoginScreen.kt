@@ -35,6 +35,7 @@ import com.youhui.mail.data.remote.readableMessage
 import com.youhui.mail.data.repository.AuthRepository
 import com.youhui.mail.data.repository.toUserMessage
 import com.youhui.mail.di.ServiceLocator
+import com.youhui.mail.util.t
 import kotlinx.coroutines.launch
 
 private val providerLabels = mapOf(
@@ -91,14 +92,14 @@ fun LoginScreen(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("解锁邮箱工作台", style = MaterialTheme.typography.headlineSmall)
+        Text(t("解锁邮箱工作台"), style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(4.dp))
         Text(serverUrl, style = MaterialTheme.typography.bodySmall)
         Spacer(Modifier.height(24.dp))
         OutlinedTextField(
             value = password,
             onValueChange = { password = it; error = null },
-            label = { Text("工作台密码") },
+            label = { Text(t("工作台密码")) },
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
             singleLine = true,
@@ -126,13 +127,13 @@ fun LoginScreen(
             },
             enabled = password.length >= 12 && !busy,
             modifier = Modifier.fillMaxWidth()
-        ) { Text(if (busy) "正在解锁…" else "解锁") }
+        ) { Text(if (busy) t("正在解锁…") else t("解锁")) }
 
         // 第三方身份 OAuth 回环登录（仅显示已在工作台绑定的登录方式）
         val boundProviders = providerLabels.filterKeys { identityProviders[it] == true }.map { it.key to it.value }
         if (boundProviders.isNotEmpty()) {
             Spacer(Modifier.height(20.dp))
-            Text("或使用已绑定的身份登录", style = MaterialTheme.typography.labelLarge)
+            Text(t("或使用已绑定的身份登录"), style = MaterialTheme.typography.labelLarge)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for ((provider, label) in boundProviders) {
@@ -140,18 +141,18 @@ fun LoginScreen(
                         onClick = { startOAuth(provider) },
                         enabled = oauthBusyProvider == null
                     ) {
-                        Text(if (oauthBusyProvider == provider) "跳转中…" else label)
+                        Text(if (oauthBusyProvider == provider) t("跳转中…") else label)
                     }
                 }
             }
             Text(
-                "需先在网页版工作台“设置”中绑定对应身份。",
+                t("需先在网页版工作台“设置”中绑定对应身份。"),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(top = 4.dp)
             )
         }
 
         Spacer(Modifier.height(8.dp))
-        TextButton(onClick = onChangeServer) { Text("更换服务器地址") }
+        TextButton(onClick = onChangeServer) { Text(t("更换服务器地址")) }
     }
 }

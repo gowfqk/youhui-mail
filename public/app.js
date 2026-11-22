@@ -18,19 +18,29 @@ const UI_LOCALE = I18N_LANG === 'en' ? 'en-US' : 'zh-CN';
 function applyI18nDom(root = document) {
   if (I18N_LANG !== 'en' || !root) return;
   const dict = I18N_EN;
-  const tree = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const tree = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      // 跳过 script/style 内的文本节点（不是 UI 文案，误替换会破坏脚本源码）
+      const parent = node.parentElement;
+      if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
   const hits = [];
   for (let node = tree.nextNode(); node; node = tree.nextNode()) {
-    const text = node.textContent;
-    const key = text.trim();
-    if (key && dict[key] != null) hits.push([node, key, dict[key]]);
+    const trimmed = node.textContent.trim();
+    if (trimmed && dict[trimmed] != null) hits.push([node, trimmed, dict[trimmed]]);
   }
-  for (const [node, key, value] of hits) node.textContent = text.replace ? text.replace(key, value) : value;
+  // 替换时保留原始首尾空白（用 replace 定位键、避免破坏缩进）
+  for (const [node, key, value] of hits) {
+    node.textContent = node.textContent.replace(key, value);
+  }
   if (root.querySelectorAll) {
     root.querySelectorAll('[placeholder],[title],[aria-label]').forEach((el) => {
       for (const attr of ['placeholder', 'title', 'aria-label']) {
-        const value = el.getAttribute(attr);
-        if (value && dict[value.trim()] != null) el.setAttribute(attr, dict[value.trim()]);
+        const raw = el.getAttribute(attr);
+        const trimmed = raw?.trim();
+        if (trimmed && dict[trimmed] != null) el.setAttribute(attr, dict[trimmed]);
       }
     });
   }

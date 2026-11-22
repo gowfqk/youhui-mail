@@ -1592,8 +1592,9 @@ function scheduleNotificationSweep(delay = 120_000) {
         await deliverPendingWebhooks(config);
         await deliverPendingWxPusher(config);
         await deliverPendingFcm(config);
-        await deliverScheduledEmails();
       }
+      // 定时发送独立于通知开关：关掉通知不影响已排程邮件的投递
+      await deliverScheduledEmails();
     } catch (error) { console.warn('New-mail notification sweep failed:', safeError(error)); }
     finally {
       notificationSweepRunning = false;

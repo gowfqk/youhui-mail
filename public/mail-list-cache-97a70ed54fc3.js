@@ -16,10 +16,12 @@
 
   function normalizeScope(scope = {}) {
     const pageValue = Number(scope.page);
+    const pageText = String(scope.page ?? '').trim();
     return {
       accountId: String(scope.accountId ?? 'all'),
       folder: String(scope.folder ?? 'INBOX'),
-      page: Number.isSafeInteger(pageValue) && pageValue > 0 ? pageValue : 1,
+      // 数字页码照旧收敛；字符串页键（UID 游标页）保留原值以便区分各游标页
+      page: Number.isSafeInteger(pageValue) && pageValue > 0 ? pageValue : (pageText && pageText.length <= 512 ? pageText : 1),
       query: String(scope.query ?? '').trim()
     };
   }
@@ -53,7 +55,7 @@
       : [];
     const rawTotal = Number(data?.total);
     const total = Number.isFinite(rawTotal) ? Math.max(0, Math.floor(rawTotal)) : messages.length;
-    return { messages, total };
+    return { messages, total, hasMore: data?.hasMore === true };
   }
 
   function create(storage = defaultStorage(), options = {}) {

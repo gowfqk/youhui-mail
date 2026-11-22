@@ -94,6 +94,18 @@ test('account removal clears its lists and aggregate lists without deleting anot
   assert.equal(cache.read(accountB).messages[0].subject, 'account-b');
 });
 
+test('cursor pages use distinct string keys and hasMore survives the round trip', () => {
+  const cache = create(new MemoryStorage());
+  const first = { accountId: 'all', folder: 'INBOX', page: 'u{"account-a":100}', query: '' };
+  const second = { accountId: 'all', folder: 'INBOX', page: 'u{"account-a":50,"account-b":9000}', query: '' };
+  assert.notEqual(cache.keyFor(first), cache.keyFor(second));
+  assert.notEqual(cache.keyFor(first), cache.keyFor({ accountId: 'all', folder: 'INBOX', page: 1, query: '' }));
+  cache.write(first, { total: 2, messages: [row('account-a', 99, '游标第一页')], hasMore: true });
+  const cached = cache.read(first);
+  assert.equal(cached.hasMore, true);
+  assert.equal(cache.read(second), null);
+});
+
 test('app shows cached rows while refreshing and clears cache on logout or account removal', () => {
   const app = read('../public/app.js');
   const index = read('../public/index.html');

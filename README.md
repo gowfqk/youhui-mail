@@ -111,7 +111,7 @@ Android 原生推送是独立于浏览器通知和 Webhook 的 FCM 通道。服�
 
 - **Bearer 令牌鉴权**：`POST /api/mobile/login`（工作台密码 + 设备 UUID）在响应体返回一次性显示的令牌，客户端以 `Authorization: Bearer <token>` 调用受保护的 `/api/*` 接口；令牌与网页 Cookie 共用会话校验，仅存 SHA-256 摘要。`GET /api/mobile/sessions` 与 `DELETE /api/mobile/sessions/:deviceId` 用于设备会话管理，吊销会级联清理该设备的推送登记。移动端会话有效期 30 天，闲置时每 5 分钟节流更新一次最近活跃时间。客户端必须将令牌存入 Keystore/EncryptedSharedPreferences，禁止写日志；反向代理不要记录 `Authorization` 头。
 - **附件下载**：详情接口新增可选参数 `attachments=meta`，此时附件只返回 `{ index, filename, contentType, size, contentId, inline }` 元数据；省略参数时保持原有 base64 内联行为。`GET /api/message/:accountId/:uid/attachment/:index` 按序号下载单个附件，默认作为附件下载；仅当类型属于可信图片白名单且显式传 `disposition=inline` 时才允许内联展示。当前服务端会先读取并解析整封邮件再返回附件，并非从 IMAP 到客户端的真正流式传输，大邮件可能占用较多内存。
-- **UID 游标分页**：`GET /api/mail` 支持可选 `beforeUid` 参数，返回 UID 严格小于该值中最新的一页；省略时保持原 `page` 分页行为。翻页时把上一页返回邮件的最小 UID 作为下一个 `beforeUid` 传入，可避免翻页间隙新邮件导致的跨页重复或遗漏。
+- **UID 游标分页**：`GET /api/mail` 支持可选 `beforeUid` 参数，返回 UID 严格小于该值中最新的一页；省略时保持原 `page` 分页行为。多账户合并视图下各账户 UID 空间互不相干，`beforeUid` 也可传 JSON 对象（`accountId` → UID）按账户分别续页；响应中的 `hasMore` 表示是否可能还有下一页。网页端把当页各账户的最小 UID 组装成下一个 `beforeUid`，可避免翻页间隙新邮件导致的跨页重复或遗漏。
 - **OAuth 回环登录（RFC 8252 + PKCE S256）**：`GET /api/mobile/identity/:provider/start` 校验回环地址/私有 scheme 白名单后返回 Provider 授权页地址；`/identity/:provider/callback` 在移动端流验证成功后生成 60 秒一次性 code，并将 `code` 和 `state` 302 回 App 回环地址。客户端应先核对返回的 `state` 与发起登录时保存的值，再将 `{ code, state, codeVerifier, deviceId }` 提交到 `POST /api/mobile/oauth/exchange`；服务端会校验与授权码绑定的 `state` 哈希及 PKCE S256，并且授权码只能兑换一次。第三方身份仍须先在工作台绑定。
 
 ## Agent 邮件访问（MCP）

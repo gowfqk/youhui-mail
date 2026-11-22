@@ -248,20 +248,21 @@ function renderMessageListData(data, source) {
   } else {
     $('#syncBanner').classList.add('hidden');
   }
+  state.hasMore = data?.hasMore === true;
   $('#messageCount').textContent = state.total > 99 ? '99+' : String(state.total);
   $('#inboxUnread').textContent = state.folder === 'INBOX' ? String(incoming.filter((message) => message.unread).length || '') : '';
   if (state.olderFirst) state.messages.reverse();
   if (!state.messages.length) renderEmpty();
   else { $('#listEmpty').classList.add('hidden'); renderMessages(); }
-  const hasPages = state.cursorStack.length > 0 || state.messages.length >= 31;
+  const hasPages = state.cursorStack.length > 0 || state.hasMore;
   $('#listPagination').classList.toggle('hidden', !hasPages);
   $('#pageLabel').textContent = `第 ${state.cursorStack.length + 1} 页`;
   $('#prevPage').disabled = !state.cursorStack.length;
-  $('#nextPage').disabled = state.messages.length < 31;
+  $('#nextPage').disabled = !state.hasMore;
 }
 function currentListScope() {
-  // page 字段承载游标键，让缓存按"第一页/各游标页"区分
-  return { accountId: state.accountId, folder: state.folder, page: state.cursor ? `u${state.cursor}` : 1, query: state.query };
+  // page 字段承载游标键（按账户的 UID 映射），让缓存按"第一页/各游标页"区分
+  return { accountId: state.accountId, folder: state.folder, page: state.cursor ? `u${JSON.stringify(state.cursor)}` : 1, query: state.query };
 }
 async function loadMessages() {
   if ($('#appView').classList.contains('hidden')) return;
@@ -270,10 +271,10 @@ async function loadMessages() {
   const list = $('#messageList');
   let hasCachedList = false;
   $('#listEmpty').classList.add('hidden'); $('#syncBanner').classList.add('hidden');
-  // 每页多取 1 封用于判断是否还有下一页；翻页用 beforeUid 游标，避免新邮件导致跨页重复
-  const params = new URLSearchParams({ folder:scope.folder, accountId:scope.accountId, limit:'31' });
+  // 翻页用按账户的 beforeUid 游标，避免新邮件导致跨页重复；是否有下一页由响应的 hasMore 决定
+  const params = new URLSearchParams({ folder:scope.folder, accountId:scope.accountId, limit:'30' });
   if (state.query) params.set('q', state.query);
-  if (state.cursor) params.set('beforeUid', String(state.cursor));
+  if (state.cursor) params.set('beforeUid', JSON.stringify(state.cursor));
   try {
     const refresh = mailListCache.load(scope, () => api(`/api/mail?${params}`), (data, source) => {
       if (requestId !== state.mailListRequestId) return;
@@ -896,7 +897,7 @@ $('#searchInput').addEventListener('input',event=>{clearTimeout(state.searchTime
 $('#searchInput').addEventListener('keydown',event=>{if(event.key==='Enter'){clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.cursor=null;state.cursorStack.length=0;loadMessages();}});
 $('#sortButton').addEventListener('click',()=>{state.olderFirst=!state.olderFirst;renderMessages();});
 $('#prevPage').addEventListener('click',()=>{if(state.cursorStack.length){state.cursor=state.cursorStack.pop();state.selected=null;loadMessages();}});
-$('#nextPage').addEventListener('click',()=>{if(state.messages.length>=31){state.cursorStack.push(state.cursor);state.cursor=Math.min(...state.messages.map((message)=>Number(message.uid)||Number.MAX_SAFE_INTEGER));state.selected=null;loadMessages();}});
+$('#nextPage').addEventListener('click',()=>{if(state.hasMore){state.cursorStack.push(state.cursor);const next={};for(const message of state.messages){const uid=Number(message.uid);if(!uid)continue;const known=next[message.accountId];if(known===undefined||uid<known)next[message.accountId]=uid;}state.cursor=next;state.selected=null;loadMessages();}});
 $('#logoutButton').addEventListener('click',async()=>{try{await api('/api/logout',{method:'POST'});}catch{}state.accounts=[];state.selected=null;state.detail=null;state.aiConfig=null;state.translationConfig=null;state.aiMessages=[];state.aiContext=null;state.status={...(state.status||{}),authenticated:false};closeAIChat(false);showAuth();toast('工作台已锁定。');});
 $('#mobileMenu').addEventListener('click',()=>{$('#sidebar').classList.add('open');$('#sidebarShade').classList.add('visible');});
 $('#mobileCloseSidebar').addEventListener('click',closeSidebar);$('#sidebarShade').addEventListener('click',closeSidebar);

@@ -767,12 +767,15 @@ async function fetchMessages(account, folderKey, page, limit, query, { beforeUid
         // 光标模式：取 uid < beforeUid 中最新的一页；total 保持全量口径，保证 UI 计数稳定。
         // search 按 seq 升序返回，末尾 limit 个即对应最大的 uid。
         const queryTerms = query ? { or: [{ from: query }, { to: query }, { subject: query }, { text: query }] } : null;
-        const windowed = await client.search(queryTerms ? { ...queryTerms, uid: `1:${beforeUid - 1}` } : { uid: `1:${beforeUid - 1}` });
-        seqs = Array.isArray(windowed) ? windowed.slice(-limit) : [];
         if (query) {
           const all = await client.search(queryTerms);
           total = Array.isArray(all) ? all.length : 0;
         } else total = client.mailbox.exists || 0;
+        if (beforeUid <= 1) seqs = []; // 游标已到最早；避免向服务器下发非法的 '1:0' 序列区间
+        else {
+          const windowed = await client.search(queryTerms ? { ...queryTerms, uid: `1:${beforeUid - 1}` } : { uid: `1:${beforeUid - 1}` });
+          seqs = Array.isArray(windowed) ? windowed.slice(-limit) : [];
+        }
       } else if (query) {
         const queryTerms = { or: [{ from: query }, { to: query }, { subject: query }, { text: query }] };
         seqs = await client.search(queryTerms);
@@ -1955,17 +1958,43 @@ app.get('/api/mail', auth, async (req, res) => {
   const query = String(req.query.q || '').trim().slice(0, 200);
   const page = Math.max(1, Math.min(1000, Number(req.query.page) || 1));
   const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 30));
-  const beforeUidRaw = Number.parseInt(String(req.query.beforeUid || ''), 10);
-  const beforeUid = Number.isSafeInteger(beforeUidRaw) && beforeUidRaw > 0 ? beforeUidRaw : null;
+  // beforeUid 既支持全局数字游标（单账户语义），也支持按账户的 JSON 对象游标
+  // {"<accountId>": <uid>}——多账户合并视图下各账户 UID 空间互不相干，必须分别续页
+  const beforeUidRaw = String(req.query.beforeUid || '').trim();
+  let beforeUids = null;
+  if (beforeUidRaw) {
+    const parseOne = (value) => {
+      const num = Number(value);
+      return Number.isSafeInteger(num) && num > 0 ? num : null;
+    };
+    if (beforeUidRaw.charCodeAt(0) === 0x7b) { // '{'
+      try {
+        const parsed = JSON.parse(beforeUidRaw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const map = new Map();
+          for (const [id, value] of Object.entries(parsed)) {
+            const num = parseOne(value);
+            if (num && id) map.set(String(id).slice(0, 200), num);
+          }
+          if (map.size) beforeUids = map;
+        }
+      } catch { beforeUids = null; }
+    } else {
+      const num = parseOne(beforeUidRaw);
+      if (num) beforeUids = num;
+    }
+  }
   try {
     let accounts = db.prepare('SELECT * FROM accounts ORDER BY created_at').all().map(mapAccount);
     if (accountFilter !== 'all') accounts = accounts.filter((a) => a.id === accountFilter);
     const results = await Promise.all(accounts.map(async (account) => {
-      try { return await fetchMessages(account, folder, page, limit, query, { beforeUid }); }
+      const accountBefore = typeof beforeUids === 'number' ? beforeUids : beforeUids instanceof Map ? (beforeUids.get(account.id) || null) : null;
+      try { return await fetchMessages(account, folder, page, limit, query, { beforeUid: accountBefore }); }
       catch (error) { return { accountId: account.id, path: null, messages: [], total: 0, error: safeError(error) }; }
     }));
     const messages = results.flatMap((result) => result.messages).sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
-    res.json({ messages, total: results.reduce((sum, r) => sum + r.total, 0), page, limit, folder, errors: results.filter((r) => r.error).map((r) => ({ accountId: r.accountId, error: r.error })) });
+    const hasMore = results.some((result) => result.messages.length >= limit);
+    res.json({ messages, total: results.reduce((sum, r) => sum + r.total, 0), hasMore, page, limit, folder, errors: results.filter((r) => r.error).map((r) => ({ accountId: r.accountId, error: r.error })) });
   } catch (error) { res.status(500).json({ error: safeError(error) }); }
 });
 app.get('/api/message/:accountId/:uid', auth, async (req, res) => {

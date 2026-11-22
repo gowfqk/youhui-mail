@@ -20,8 +20,9 @@
     return {
       accountId: String(scope.accountId ?? 'all'),
       folder: String(scope.folder ?? 'INBOX'),
-      // 数字页码照旧收敛；字符串页键（UID 游标页）保留原值以便区分各游标页
-      page: Number.isSafeInteger(pageValue) && pageValue > 0 ? pageValue : (pageText && pageText.length <= 512 ? pageText : 1),
+      // 数字页码照旧收敛；字符串页键（UID 游标页）保留原值以便区分各游标页。
+      // 按账户游标是多账户的 JSON 映射，放宽上限避免多账户部署时键超限退化为第 1 页
+      page: Number.isSafeInteger(pageValue) && pageValue > 0 ? pageValue : (pageText && pageText.length <= 2048 ? pageText : 1),
       query: String(scope.query ?? '').trim()
     };
   }

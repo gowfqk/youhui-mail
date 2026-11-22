@@ -1,0 +1,5 @@
+# 统一以 LF 存储：前端 hash 产物名按内容 sha256 生成，CRLF/LF 混用会导致跨平台 digest 不一致
+* text=auto eol=lf
+*.png binary
+*.ico binary
+*.jar binary

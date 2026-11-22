@@ -84,10 +84,6 @@ db.exec(`
     code_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, device_state_hash TEXT NOT NULL,
     code_challenge TEXT NOT NULL, expires_at INTEGER NOT NULL, consumed_at INTEGER
   );
-  CREATE INDEX IF NOT EXISTS idx_notification_events_webhook_due ON notification_events(webhook_next_attempt_at) WHERE webhook_pending = 1 AND webhook_abandoned = 0;
-  CREATE INDEX IF NOT EXISTS idx_notification_events_wxpusher_due ON notification_events(wxpusher_next_attempt_at) WHERE wxpusher_pending = 1 AND wxpusher_abandoned = 0;
-  CREATE INDEX IF NOT EXISTS idx_notification_events_fcm_due ON notification_events(fcm_next_attempt_at) WHERE fcm_pending = 1 AND fcm_abandoned = 0;
-  CREATE INDEX IF NOT EXISTS idx_notification_events_created_at ON notification_events(created_at);
 `);
 // WxPusher has its own retry lifecycle; do not repurpose legacy webhook fields.
 for (const [column, definition] of Object.entries({
@@ -123,6 +119,14 @@ for (const [column, definition] of Object.entries({
     db.exec(`ALTER TABLE identity_oauth_states ADD COLUMN ${column} ${definition}`);
   }
 }
+// 通知事件表的部分索引：必须在守卫迁移补列之后统一创建——
+// 全新库的主 schema 里 wxpusher/fcm 列尚未通过 ALTER TABLE 补齐，提前引用会导致启动失败
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_notification_events_webhook_due ON notification_events(webhook_next_attempt_at) WHERE webhook_pending = 1 AND webhook_abandoned = 0;
+  CREATE INDEX IF NOT EXISTS idx_notification_events_wxpusher_due ON notification_events(wxpusher_next_attempt_at) WHERE wxpusher_pending = 1 AND wxpusher_abandoned = 0;
+  CREATE INDEX IF NOT EXISTS idx_notification_events_fcm_due ON notification_events(fcm_next_attempt_at) WHERE fcm_pending = 1 AND fcm_abandoned = 0;
+  CREATE INDEX IF NOT EXISTS idx_notification_events_created_at ON notification_events(created_at);
+`);
 function recoverPendingRestore() {
   if (!fs.existsSync(RESTORE_PENDING_PATH)) return;
   let pending;

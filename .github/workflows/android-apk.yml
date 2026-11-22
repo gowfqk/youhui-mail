@@ -20,6 +20,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # runner 镜像不再预装 Android SDK，需显式安装 cmdline-tools 提供 sdkmanager
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:

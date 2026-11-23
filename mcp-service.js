@@ -73,7 +73,6 @@ const TOOLS_BY_NAME = new Map(TOOL_DEFINITIONS.map((tool) => [tool.name, tool]))
 const LEGACY_READ_KEY = 'mcp_token_hash';
 const TOKEN_KEYS = Object.fromEntries(Object.keys(PERMISSIONS).map((permission) => [permission, `mcp_token_hash_${permission}`]));
 const TOKEN_SCOPE_KEYS = Object.fromEntries(Object.keys(PERMISSIONS).map((permission) => [permission, `mcp_token_accounts_${permission}`]));
-const approvals = new Map();
 const APPROVAL_TTL_MS = 30 * 60_000;
 const MAX_PENDING_APPROVALS = 100;
 const rateLimits = new Map();
@@ -149,8 +148,11 @@ function allowRequest(req) {
 setInterval(() => {
   const cutoff = Date.now() - RATE_WINDOW_MS;
   for (const [ip, entry] of rateLimits) if (entry.startedAt < cutoff) rateLimits.delete(ip);
-  for (const [id, approval] of approvals) if (approval.createdAt < Date.now() - APPROVAL_TTL_MS) approvals.delete(id);
 }, RATE_WINDOW_MS).unref();
+
+function pruneExpiredApprovals(db, now = Date.now()) {
+  return db.prepare('DELETE FROM mcp_approvals WHERE created_at < ?').run(now - APPROVAL_TTL_MS).changes;
+}
 
 function getAccount(db, mapAccount, id) {
   const row = db.prepare('SELECT * FROM accounts WHERE id = ?').get(String(id || ''));
@@ -175,11 +177,25 @@ function toolResult(value, modern, isError = false) {
   const structuredContent = value && typeof value === 'object' && !Array.isArray(value) ? value : { value };
   return { ...(modern ? { resultType: 'complete' } : {}), content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }], structuredContent, isError };
 }
-function createApproval(kind, account, payload) {
-  for (const [id, approval] of approvals) if (approval.createdAt < Date.now() - APPROVAL_TTL_MS) approvals.delete(id);
-  if (approvals.size >= MAX_PENDING_APPROVALS) throw new Error('待确认操作已满，请先在邮汇工作台处理现有请求。');
+function approvalFromRow(row, decrypt) {
+  const stored = decrypt(row.payload_encrypted);
+  return {
+    id: row.id, kind: row.kind, accountId: row.account_id,
+    accountEmail: stored.accountEmail, accountLabel: stored.accountLabel,
+    payload: stored.payload, createdAt: Number(row.created_at), executing: Boolean(row.executing)
+  };
+}
+function createApproval(db, encrypt, kind, account, payload) {
   const id = crypto.randomUUID();
-  approvals.set(id, { id, kind, accountId: account.id, accountEmail: account.email, accountLabel: account.label, payload, createdAt: Date.now() });
+  const createdAt = Date.now();
+  const save = db.transaction(() => {
+    pruneExpiredApprovals(db, createdAt);
+    const pendingCount = db.prepare('SELECT COUNT(*) AS count FROM mcp_approvals').get().count;
+    if (pendingCount >= MAX_PENDING_APPROVALS) throw new Error('待确认操作已满，请先在邮汇工作台处理现有请求。');
+    db.prepare('INSERT INTO mcp_approvals (id, kind, account_id, payload_encrypted, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(id, kind, String(account.id), encrypt({ accountEmail: account.email, accountLabel: account.label, payload }), createdAt);
+  });
+  save.immediate();
   return { pendingConfirmation: true, approvalId: id, message: kind === 'send_email' ? '邮件已提交待确认队列；用户在邮汇工作台确认前不会发送。' : '删信操作已提交待确认队列；用户在邮汇工作台确认前不会执行。' };
 }
 function publicApproval(approval) {
@@ -193,10 +209,19 @@ function publicApproval(approval) {
   };
 }
 async function executeApproval(id, dependencies) {
-  const approval = approvals.get(id);
-  if (!approval) throw new Error('待确认请求已处理、已过期或不存在。');
-  if (approval.executing) throw new Error('此请求正在执行，请稍候。');
-  approval.executing = true;
+  const { db, decrypt } = dependencies;
+  pruneExpiredApprovals(db);
+  const row = db.prepare('SELECT * FROM mcp_approvals WHERE id = ?').get(id);
+  if (!row) throw new Error('待确认请求已处理、已过期或不存在。');
+  if (row.executing) throw new Error('此请求正在执行，请稍候。');
+  const approval = approvalFromRow(row, decrypt);
+  const claimed = db.prepare('UPDATE mcp_approvals SET executing = 1 WHERE id = ? AND executing = 0 AND created_at >= ?')
+    .run(id, Date.now() - APPROVAL_TTL_MS);
+  if (!claimed.changes) {
+    const current = db.prepare('SELECT executing FROM mcp_approvals WHERE id = ?').get(id);
+    if (current?.executing) throw new Error('此请求正在执行，请稍候。');
+    throw new Error('待确认请求已处理、已过期或不存在。');
+  }
   try {
     const account = getAccount(dependencies.db, dependencies.mapAccount, approval.accountId);
     if (!account) throw new Error('原邮箱账户已移除，此请求无法执行。');
@@ -206,10 +231,10 @@ async function executeApproval(id, dependencies) {
       await dependencies.mutateMessage(account, approval.payload.folder, approval.payload.uid, 'delete');
       result = { ok: true, accountId: approval.accountId, uid: approval.payload.uid, folder: approval.payload.folder, action: 'delete' };
     } else throw new Error('不支持的待确认操作。');
-    approvals.delete(id);
+    db.prepare('DELETE FROM mcp_approvals WHERE id = ?').run(id);
     return result;
   } catch (error) {
-    approval.executing = false;
+    db.prepare('UPDATE mcp_approvals SET executing = 0 WHERE id = ?').run(id);
     throw error;
   }
 }
@@ -276,7 +301,7 @@ async function executeTool(name, rawArguments, dependencies, authorization) {
       const action = String(args.action || '');
       if (!['read', 'unread', 'star', 'unstar', 'archive', 'delete'].includes(action)) throw new Error('不支持此邮件操作。');
       const folder = String(args.folder || 'INBOX').slice(0, 200);
-      if (action === 'delete') return createApproval('manage_email', account, { uid, folder });
+      if (action === 'delete') return createApproval(db, dependencies.encrypt, 'manage_email', account, { uid, folder });
       await mutateMessage(account, folder, uid, action);
       return { ok: true, accountId, uid, folder, action };
     }
@@ -291,7 +316,7 @@ async function executeTool(name, rawArguments, dependencies, authorization) {
       const subject = String(args.subject || '').slice(0, 998);
       const text = String(args.text || '').slice(0, 500_000);
       if (!subject.trim() && !text.trim()) throw new Error('邮件主题和正文不能同时为空。');
-      return createApproval('send_email', account, { to, cc, bcc, subject, text });
+      return createApproval(db, dependencies.encrypt, 'send_email', account, { to, cc, bcc, subject, text });
     }
     throw new Error(`不支持的 MCP 工具：${name}`);
   } catch (error) {
@@ -304,8 +329,9 @@ function legacyInitialize(request) {
   if (!LEGACY_VERSIONS.includes(requested)) return { status: 400, body: errorResponse(request.id, -32602, `不支持的 MCP 协议版本：${requested}`, { supported: LEGACY_VERSIONS }) };
   return { status: 200, body: resultResponse(request.id, { protocolVersion: requested, capabilities: { tools: { listChanged: false } }, serverInfo: SERVER_INFO, instructions: INSTRUCTIONS }) };
 }
-export function attachMcp({ app, auth, db, hash, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage, safeError }) {
-  const dependencies = { db, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage, safeError };
+export function attachMcp({ app, auth, db, hash, encrypt, decrypt, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage, safeError }) {
+  const dependencies = { db, encrypt, decrypt, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage, safeError };
+  pruneExpiredApprovals(db);
   app.get('/api/mcp/config', auth, (req, res) => {
     const base = process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`;
     const legacy = Boolean(db.prepare('SELECT 1 FROM app_preferences WHERE key = ?').get(LEGACY_READ_KEY));
@@ -367,9 +393,10 @@ export function attachMcp({ app, auth, db, hash, mapAccount, listMailboxes, fetc
     res.json({ configured: false });
   });
   app.get('/api/mcp/approvals', auth, (req, res) => {
-    for (const [id, approval] of approvals) if (approval.createdAt < Date.now() - APPROVAL_TTL_MS) approvals.delete(id);
+    pruneExpiredApprovals(db);
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ approvals: [...approvals.values()].sort((a, b) => a.createdAt - b.createdAt).map(publicApproval) });
+    const rows = db.prepare('SELECT * FROM mcp_approvals ORDER BY created_at').all();
+    res.json({ approvals: rows.map((row) => publicApproval(approvalFromRow(row, decrypt))) });
   });
   app.post('/api/mcp/approvals/:id/approve', auth, async (req, res) => {
     try {
@@ -380,8 +407,12 @@ export function attachMcp({ app, auth, db, hash, mapAccount, listMailboxes, fetc
   });
   app.post('/api/mcp/approvals/:id/deny', auth, (req, res) => {
     const id = String(req.params.id || '');
-    if (!approvals.has(id)) return res.status(404).json({ error: '待确认请求已处理、已过期或不存在。' });
-    approvals.delete(id);
+    pruneExpiredApprovals(db);
+    const approval = db.prepare('SELECT executing FROM mcp_approvals WHERE id = ?').get(id);
+    if (!approval) return res.status(404).json({ error: '待确认请求已处理、已过期或不存在。' });
+    if (approval.executing) return res.status(409).json({ error: '此请求正在执行，无法拒绝。' });
+    const removed = db.prepare('DELETE FROM mcp_approvals WHERE id = ? AND executing = 0').run(id);
+    if (!removed.changes) return res.status(409).json({ error: '此请求正在执行，无法拒绝。' });
     res.setHeader('Cache-Control', 'no-store');
     res.json({ ok: true });
   });

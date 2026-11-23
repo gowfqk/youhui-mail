@@ -90,6 +90,12 @@ db.exec(`
     code_hash TEXT PRIMARY KEY, provider TEXT NOT NULL, device_state_hash TEXT NOT NULL,
     code_challenge TEXT NOT NULL, expires_at INTEGER NOT NULL, consumed_at INTEGER
   );
+  CREATE TABLE IF NOT EXISTS mcp_approvals (
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('manage_email', 'send_email')),
+    account_id TEXT NOT NULL, payload_encrypted TEXT NOT NULL, created_at INTEGER NOT NULL,
+    executing INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_mcp_approvals_created_at ON mcp_approvals(created_at);
 `);
 // WxPusher has its own retry lifecycle; do not repurpose legacy webhook fields.
 for (const [column, definition] of Object.entries({
@@ -1795,7 +1801,7 @@ async function exportBackup(req, res, encrypted, passphrase) {
     try {
       snapshot.transaction(() => {
         snapshot.exec('DELETE FROM sessions; DELETE FROM oauth_states; DELETE FROM identity_oauth_states;');
-        snapshot.exec('DELETE FROM push_devices; DELETE FROM ai_digest_runs; UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1; UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1; UPDATE notification_events SET fcm_pending=0,fcm_abandoned=1 WHERE fcm_pending=1;');
+        snapshot.exec('DELETE FROM push_devices; DELETE FROM ai_digest_runs; DELETE FROM mcp_approvals; UPDATE notification_events SET webhook_pending=0,webhook_abandoned=1 WHERE webhook_pending=1; UPDATE notification_events SET wxpusher_pending=0,wxpusher_abandoned=1 WHERE wxpusher_pending=1; UPDATE notification_events SET fcm_pending=0,fcm_abandoned=1 WHERE fcm_pending=1;');
         snapshot.prepare('DELETE FROM app_preferences WHERE key = ?').run('__system_restore_tx');
       })();
     } finally { snapshot.close(); }
@@ -1869,7 +1875,7 @@ app.post('/api/backup/restore', auth, express.raw({ type: 'application/octet-str
     const destinationTables = backupTableNames(db);
     // 会话/临时状态类表在恢复时只清空、不拷贝内容（导出时也会清空），
     // 其列结构会随版本演进，因此豁免"缺失"与"列结构"严格比对，保证旧备份可恢复。
-    const transientTables = new Set(['sessions', 'oauth_states', 'identity_oauth_states', 'ai_digest_runs', 'push_devices', 'mobile_oauth_codes']);
+    const transientTables = new Set(['sessions', 'oauth_states', 'identity_oauth_states', 'ai_digest_runs', 'push_devices', 'mobile_oauth_codes', 'mcp_approvals']);
     try {
       sourceTables = verifyBackupDatabase(candidate, restoredKey);
       const missingTables = destinationTables.filter((table) => !sourceTables.includes(table) && !transientTables.has(table));
@@ -2420,7 +2426,7 @@ app.get('/api/oauth/:provider/start', auth, (req, res) => {
   res.json({ url: url.toString() });
 });
 attachAI({ app, auth, db, encrypt, decrypt, mapAccount, withFreshAccount, makeImap, simpleParser });
-attachMcp({ app, auth, db, hash, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage: sendMcpMail, safeError });
+attachMcp({ app, auth, db, hash, encrypt, decrypt, mapAccount, listMailboxes, fetchMessages, getMailDetail, mutateMessage, sendMessage: sendMcpMail, safeError });
 app.use('/api', (req, res) => res.status(404).json({ error: '接口不存在。' }));
 app.get('*path', (req, res) => {
   // index.html 不缓存，保证发版后浏览器立即拿到新的资源引用

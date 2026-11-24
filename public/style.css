@@ -117,7 +117,8 @@
 }
 @media(max-width:800px){
   .app-shell{height:100dvh;min-height:0}
-  .sidebar{height:100dvh;padding-top:calc(20px + env(safe-area-inset-top));padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+  .sidebar{height:100dvh;overflow-y:auto;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;padding-top:calc(20px + env(safe-area-inset-top));padding-bottom:calc(14px + env(safe-area-inset-bottom))}
+  .account-nav{min-height:0;max-height:min(30vh,240px);overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
   .topbar{padding-left:max(9px,env(safe-area-inset-left));padding-right:max(9px,env(safe-area-inset-right))}
   .message-list,.detail-pane,.settings-content,.ai-chat-messages{-webkit-overflow-scrolling:touch;overscroll-behavior:contain}
   .mobile-menu,.refresh-button,.ai-launcher{min-height:42px;min-width:42px}

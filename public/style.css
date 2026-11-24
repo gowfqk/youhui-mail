@@ -253,3 +253,20 @@
 }
 
 .thread-badge{display:inline-block;margin-left:4px;padding:1px 5px;border-radius:8px;background:#e8f0f2;color:#0b5c56;font-size:10px;font-weight:700;vertical-align:middle}
+
+
+/* Mail list readability: clear hierarchy without turning rows into cards. */
+.message-row{min-height:92px;padding:13px 16px 11px 15px;gap:12px}
+.message-row.selected{background:#edf7f4;box-shadow:inset 3px 0 #5fa99b}
+.message-row.unread.selected{background:#e7f3ef;box-shadow:inset 3px 0 #168779}
+.message-sender{color:#4c5b61;font-size:12px;font-weight:500}
+.message-time{color:#87949a;font-size:10px}
+.message-subject{margin:5px 0 5px;color:#405158;font-size:13px;line-height:1.35}
+.message-preview{color:#75848a;font-size:11px;line-height:1.4}
+.mail-chip{color:#78878c;font-size:9px}
+@media(max-width:800px){
+  .message-row{min-height:90px;padding:12px 16px 11px}
+  .message-sender{font-size:12px}
+  .message-subject{font-size:13px}
+  .message-preview{font-size:11px}
+}

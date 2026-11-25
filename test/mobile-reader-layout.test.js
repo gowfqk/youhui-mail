@@ -53,3 +53,17 @@ test('mail details expose verification copy, direct reply and an AI summary acti
   assert.match(app, /inReplyTo:\s*detail\.messageId/);
   assert.match(app, /text:\s*detailBodyPlainText\(detail\)\.slice\(0, 12_000\)/);
 });
+
+
+test('preview fidelity pass makes the workbench hierarchy visibly stronger', () => {
+  const themeStyles = read('../public/redesign-theme.css');
+
+  assert.match(themeStyles, /--yh-bg-canvas:\s*#e8f1ee/);
+  assert.match(themeStyles, /\.sidebar\s*\{[^}]*width:\s*250px/);
+  assert.match(themeStyles, /\.workspace\s*\{[^}]*padding:\s*17px !important;\s*gap:\s*17px !important/);
+  assert.match(themeStyles, /\.list-filter-tabs button\.active\s*\{[^}]*background:\s*var\(--yh-accent\) !important/);
+  assert.match(themeStyles, /\.detail-subject\s*\{[^}]*font-size:\s*clamp\(24px/);
+  assert.match(themeStyles, /\.verification-code-card\s*\{[^}]*border-radius:\s*15px !important/);
+  assert.match(themeStyles, /\.quick-reply-form input\s*\{[^}]*height:\s*44px/);
+  assert.match(themeStyles, /html\.dark,[\s\S]*?--yh-bg-canvas:\s*#0a1418/);
+});

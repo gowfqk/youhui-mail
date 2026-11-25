@@ -7,6 +7,7 @@ const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.ur
 test('mobile reader expands into the viewport and keeps message actions reachable', () => {
   const app = read('../public/app.js');
   const stylesheet = read('../public/style.css');
+  const themeStyles = read('../public/redesign-theme.css');
   const mobileStyles = stylesheet.slice(stylesheet.lastIndexOf('/* Mobile reading mode:'));
 
   assert.match(app, /classList\.add\('mobile-reading'\)/);
@@ -17,4 +18,8 @@ test('mobile reader expands into the viewport and keeps message actions reachabl
   assert.match(mobileStyles, /\.app-shell\.mobile-reading \.detail-toolbar\{position:sticky/);
   assert.match(mobileStyles, /\.app-shell\.mobile-reading \.detail-toolbar \.icon-button\{[^}]*min-height:42px/);
   assert.match(mobileStyles, /\.app-shell\.mobile-reading \.detail-view\{[^}]*max-width:none/);
+  assert.match(stylesheet, /\.message-list\{[^}]*overflow-y:auto/);
+  assert.match(stylesheet, /\.detail-pane\{[^}]*overflow-y:auto/);
+  assert.match(themeStyles, /\.workspace\s*\{\s*padding:\s*0 !important;\s*gap:\s*0 !important;/);
+  assert.match(themeStyles, /\.list-pane,\s*\.detail-pane\s*\{\s*border:\s*0 !important;\s*border-radius:\s*0 !important;/);
 });

@@ -41,17 +41,20 @@ test('content-hashed app and iframe assets exactly match their sources', () => {
   const frameSource = read('../public/mail-frame.js');
   const frameHtml = read('../mail-frame.html');
   const styleSource = read('../public/style.css');
+  const themeSource = read('../public/redesign-theme.css');
   const appName = index.match(/<script src="\/(app-[a-f0-9]{12}\.js)" defer>/)?.[1];
   const cacheName = index.match(/<script src="\/(mail-list-cache-[a-f0-9]{12}\.js)" defer>/)?.[1];
   const contextActionName = index.match(/<script src="\/(message-context-actions-[a-f0-9]{12}\.js)" defer>/)?.[1];
   const frameName = frameHtml.match(/<script src="\/(mail-frame-[a-f0-9]{12}\.js)" defer>/)?.[1];
   const styleName = index.match(/<link rel="stylesheet" href="\/(style-[a-f0-9]{12}\.css)">/)?.[1];
+  const themeName = index.match(/<link rel="stylesheet" href="\/(redesign-theme-[a-f0-9]{12}\.css)">/)?.[1];
 
   assert.ok(appName, 'index should reference the hashed app bundle');
   assert.ok(cacheName, 'index should reference the hashed list-cache helper');
   assert.ok(contextActionName, 'index should reference the hashed context-action helper');
   assert.ok(frameName, 'mail frame should reference the hashed frame bundle');
   assert.ok(styleName, 'index should reference the hashed stylesheet');
+  assert.ok(themeName, 'index should reference the hashed redesign theme');
   assert.ok(index.indexOf(cacheName) < index.indexOf(appName), 'list-cache helper should load before app bundle');
   assert.ok(index.indexOf(cacheName) < index.indexOf(contextActionName) && index.indexOf(contextActionName) < index.indexOf(appName), 'context-action helper should load between cache and app bundles');
   assert.equal(appName, `app-${digest12(appSource)}.js`);
@@ -59,9 +62,12 @@ test('content-hashed app and iframe assets exactly match their sources', () => {
   assert.equal(contextActionName, `message-context-actions-${digest12(contextActionSource)}.js`);
   assert.equal(frameName, `mail-frame-${digest12(frameSource)}.js`);
   assert.equal(styleName, `style-${digest12(styleSource)}.css`);
+  assert.equal(themeName, `redesign-theme-${digest12(themeSource)}.css`);
+  assert.ok(index.indexOf(styleName) < index.indexOf(themeName), 'redesign theme should load after the base stylesheet');
   assert.equal(read(`../public/${appName}`), appSource);
   assert.equal(read(`../public/${cacheName}`), cacheSource);
   assert.equal(read(`../public/${contextActionName}`), contextActionSource);
   assert.equal(read(`../public/${frameName}`), frameSource);
   assert.equal(read(`../public/${styleName}`), styleSource);
+  assert.equal(read(`../public/${themeName}`), themeSource);
 });

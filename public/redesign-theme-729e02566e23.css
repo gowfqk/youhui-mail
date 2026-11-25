@@ -1,0 +1,221 @@
+/* Youhui Mail - Modern Workbench Theme Override
+ * Source stylesheet; the content-hashed copy is loaded after the current base stylesheet.
+ */
+
+:root {
+  --yh-bg-canvas: #f3f5f8;
+  --yh-bg-sidebar: #f8fafc;
+  --yh-bg-surface: #ffffff;
+  --yh-bg-subtle: #f1f5f9;
+  --yh-bg-hover: #f1f5f9;
+  --yh-bg-active: #ecfdf5;
+  --yh-border: rgba(15, 23, 42, 0.08);
+  --yh-border-strong: rgba(15, 23, 42, 0.14);
+  --yh-text: #0f172a;
+  --yh-text-sec: #475569;
+  --yh-text-muted: #94a3b8;
+  --yh-accent: #0d9488;
+  --yh-accent-hover: #0f766e;
+  --yh-accent-soft: rgba(13, 148, 136, 0.12);
+  --yh-accent-text: #0f766e;
+  --yh-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --yh-shadow-lg: 0 20px 44px -12px rgba(15, 23, 42, 0.16);
+}
+
+html.dark,
+[data-theme="dark"] {
+  --yh-bg-canvas: #090d16;
+  --yh-bg-sidebar: #0e1422;
+  --yh-bg-surface: #131b2c;
+  --yh-bg-subtle: #1a2438;
+  --yh-bg-hover: rgba(255, 255, 255, 0.05);
+  --yh-bg-active: rgba(20, 184, 166, 0.14);
+  --yh-border: rgba(255, 255, 255, 0.08);
+  --yh-border-strong: rgba(255, 255, 255, 0.14);
+  --yh-text: #f1f5f9;
+  --yh-text-sec: #94a3b8;
+  --yh-text-muted: #64748b;
+  --yh-accent: #14b8a6;
+  --yh-accent-hover: #2dd4bf;
+  --yh-accent-soft: rgba(20, 184, 166, 0.16);
+  --yh-accent-text: #5eead4;
+  --yh-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --yh-shadow-lg: 0 24px 48px -12px rgba(0, 0, 0, 0.65);
+}
+
+body {
+  background: var(--yh-bg-canvas) !important;
+  color: var(--yh-text) !important;
+  font-family: "Inter", "DM Sans", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Auth View */
+.auth-view {
+  background:
+    radial-gradient(circle at top left, rgba(13, 148, 136, 0.14), transparent 45%),
+    radial-gradient(circle at bottom right, rgba(14, 165, 233, 0.12), transparent 45%),
+    var(--yh-bg-canvas) !important;
+}
+
+.auth-card {
+  background: var(--yh-bg-surface) !important;
+  border: 1px solid var(--yh-border-strong) !important;
+  border-radius: 20px !important;
+  box-shadow: var(--yh-shadow-lg) !important;
+}
+
+/* App Shell & Sidebar */
+.app-shell {
+  background: var(--yh-bg-canvas) !important;
+}
+
+.sidebar {
+  background: var(--yh-bg-sidebar) !important;
+  border-right: 1px solid var(--yh-border) !important;
+}
+
+#composeButton {
+  background: linear-gradient(135deg, var(--yh-accent) 0%, #0f766e 100%) !important;
+  color: #ffffff !important;
+  border: none !important;
+  border-radius: 12px !important;
+  font-weight: 600 !important;
+  box-shadow: 0 4px 14px rgba(13, 148, 136, 0.28) !important;
+  transition: transform 0.15s ease, filter 0.15s ease !important;
+}
+
+#composeButton:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.sidebar .nav-item,
+.sidebar button.nav-link,
+.sidebar a.nav-link {
+  border-radius: 8px !important;
+  transition: background 0.14s ease, color 0.14s ease !important;
+}
+
+.sidebar .nav-item.active,
+.sidebar .active {
+  background: var(--yh-bg-active) !important;
+  color: var(--yh-accent-text) !important;
+  box-shadow: none !important;
+}
+
+/* Topbar */
+.topbar {
+  background: var(--yh-bg-surface) !important;
+  border-bottom: 1px solid var(--yh-border) !important;
+}
+
+#searchInput {
+  background: var(--yh-bg-subtle) !important;
+  border: 1px solid var(--yh-border) !important;
+  border-radius: 10px !important;
+  color: var(--yh-text) !important;
+}
+
+#searchInput:focus {
+  background: var(--yh-bg-surface) !important;
+  border-color: var(--yh-accent) !important;
+  box-shadow: 0 0 0 3px var(--yh-accent-soft) !important;
+}
+
+/* Workspace Panes */
+.workspace {
+  padding: 12px !important;
+  gap: 12px !important;
+  background: var(--yh-bg-canvas) !important;
+}
+
+.list-pane,
+.detail-pane {
+  background: var(--yh-bg-surface) !important;
+  border: 1px solid var(--yh-border) !important;
+  border-radius: 16px !important;
+  box-shadow: var(--yh-shadow-sm) !important;
+}
+
+.list-toolbar,
+.detail-toolbar {
+  border-bottom: 1px solid var(--yh-border) !important;
+}
+
+/* Message Rows */
+#messageList {
+  padding: 8px !important;
+}
+
+.message-row {
+  border-radius: 12px !important;
+  border: 1px solid transparent !important;
+  margin-bottom: 4px !important;
+  box-shadow: none !important;
+  transition: background 0.14s ease, border-color 0.14s ease !important;
+}
+
+.message-row:hover {
+  background: var(--yh-bg-hover) !important;
+}
+
+.message-row.active,
+.message-row.selected {
+  background: var(--yh-bg-active) !important;
+  border-color: var(--yh-accent-soft) !important;
+  box-shadow: none !important;
+}
+
+/* AI Chat Drawer */
+.ai-chat-panel {
+  border-radius: 16px !important;
+  border: 1px solid var(--yh-border-strong) !important;
+  background: var(--yh-bg-surface) !important;
+  box-shadow: var(--yh-shadow-lg) !important;
+}
+
+/* Dialogs & Settings */
+dialog {
+  background: var(--yh-bg-surface) !important;
+  color: var(--yh-text) !important;
+  border: 1px solid var(--yh-border-strong) !important;
+  border-radius: 16px !important;
+  box-shadow: var(--yh-shadow-lg) !important;
+}
+
+dialog::backdrop {
+  background: rgba(15, 23, 42, 0.5) !important;
+  backdrop-filter: blur(4px);
+}
+
+.settings-layout {
+  background: var(--yh-bg-surface) !important;
+}
+
+#settingsNav {
+  background: var(--yh-bg-sidebar) !important;
+  border-right: 1px solid var(--yh-border) !important;
+}
+
+#settingsNav button.active {
+  background: var(--yh-bg-active) !important;
+  color: var(--yh-accent-text) !important;
+}
+
+@media (max-width: 800px) {
+  /* Preserve the full-width, independently scrolling mobile reading view. */
+  .workspace {
+    padding: 0 !important;
+    gap: 0 !important;
+  }
+  .list-pane,
+  .detail-pane {
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+  #messageList {
+    padding: 4px !important;
+  }
+}

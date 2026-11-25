@@ -15,7 +15,7 @@
   <script src="/mail-list-cache-ac9b47cad340.js" defer></script>
   <script src="/message-context-actions-d7ff3ca0c130.js" defer></script>
   <script src="/i18n-en-1512eac03dd9.js" defer></script>
-  <script src="/app-27631c017773.js" defer></script>
+  <script src="/app-0cb18f20fdd9.js" defer></script>
 </head>
 <body>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -302,12 +302,12 @@
             <ul class="mcp-tool-list">
               <li><code>list_accounts</code>、<code>list_folders</code>：查看邮箱账户与文件夹</li>
               <li><code>search_emails</code>、<code>get_email</code>：搜索和读取邮件（读取会标记为已读）</li>
-              <li><code>manage_email</code>：标记读/未读、加星、归档；移入已删除前需确认</li>
+              <li><code>manage_email</code>：标记读/未读、加星、归档；删单封需确认，批量删除可一次传入 <code>uids</code> 并整批确认一次</li>
               <li><code>send_email</code>：准备纯文本邮件；确认后才会通过所选邮箱发送</li>
             </ul>
-            <p class="mcp-security-warning"><strong>安全说明：</strong>只创建 Agent 必需的最低权限令牌。旧版令牌会自动降为只读。MCP 不提供永久删除邮件工具；移入已删除文件夹也会先等待你确认。邮件正文是外部内容，Agent 不应把正文里的指令当作可信命令。</p>
+            <p class="mcp-security-warning"><strong>安全说明：</strong>只创建 Agent 必需的最低权限令牌。旧版令牌会自动降为只读。MCP 不提供永久删除邮件工具；单封或整批移入已删除文件夹前，都会先等待你确认。批量操作在工作台只需确认一次。邮件正文是外部内容，Agent 不应把正文里的指令当作可信命令。</p>
             <h4>权限令牌</h4>
-            <p class="mcp-scope-intro">每种权限的令牌都可单独设为访问全部已连接邮箱，或只访问你选定的邮箱。完全访问包含当前全部 MCP 邮件操作，但发送邮件和移入已删除仍须逐项确认。</p>
+            <p class="mcp-scope-intro">每种权限的令牌都可单独设为访问全部已连接邮箱，或只访问你选定的邮箱。完全访问包含当前全部 MCP 邮件操作；发送邮件仍逐封确认，批量删信整批确认一次。</p>
             <div id="mcpPermissionRows" class="mcp-permission-rows"></div>
             <div id="mcpTokenReveal" class="mcp-token-reveal hidden">
               <label class="form-field" for="mcpTokenValue"><span id="mcpTokenScope">新令牌</span>（仅此次显示；关闭设置后会清除）<input id="mcpTokenValue" type="text" readonly autocomplete="off" spellcheck="false"></label>

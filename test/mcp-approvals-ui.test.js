@@ -19,3 +19,13 @@ test('web app exposes approval polling failures instead of silently hiding them'
   assert.match(app, /\(!list\.length && !mcpApprovalPollError\)/);
   assert.match(app, /暂时无法读取待确认操作，请稍后重试/);
 });
+
+test('batch delete approval shows all UIDs and asks for one confirmation for the whole batch', () => {
+  const handler = app.match(/\$\('#mcpApprovalList'\)\.addEventListener\('click', async \(event\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
+
+  assert.match(app, /const uids = Array\.isArray\(item\.uids\)/);
+  assert.match(app, /待批量移入已删除（\$\{uids\.length\} 封）/);
+  assert.match(handler, /approvalUids\.join\(/);
+  assert.match(handler, /if \(!await askConfirm\(confirmTitle, copy, confirmLabel, true\)\) return;/);
+  assert.equal((handler.match(/askConfirm\(/g) || []).length, 1);
+});

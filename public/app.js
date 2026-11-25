@@ -1059,9 +1059,9 @@ function clearMcpTokenReveal() {
 }
 const mcpPermissionDefinitions = [
   { id:'read_only', label:'只读', description:'查看账户、文件夹、搜索和读取邮件（读取会标记为已读）。' },
-  { id:'email_management', label:'邮件管理', description:'只读权限，并可标记读/未读、加星、归档；移入已删除必须确认。' },
+  { id:'email_management', label:'邮件管理', description:'只读权限，并可标记读/未读、加星、归档；批量移入已删除时整批确认一次。' },
   { id:'send_mail', label:'发送邮件', description:'只读权限，并可提交邮件待确认；确认后才会发送。' },
-  { id:'full_access', label:'完全访问', description:'包含当前全部 MCP 邮件工具；发送邮件与移入已删除仍须逐项确认。' }
+  { id:'full_access', label:'完全访问', description:'包含当前全部 MCP 邮件工具；发送邮件逐封确认，批量删信整批确认一次。' }
 ];
 function selectedMcpAccountScope(row) {
   if (row.querySelector('[data-mcp-scope-all]')?.checked) return 'all';
@@ -1199,12 +1199,17 @@ function renderMcpApprovals() {
   }
   root.innerHTML = list.map((item) => {
     const send = item.kind === 'send_email';
-    const title = send ? `${L('待发送：')}${item.subject || L('(无主题)')}` : L('待移入已删除');
+    const uids = Array.isArray(item.uids) ? item.uids.map(Number).filter((uid) => Number.isSafeInteger(uid) && uid > 0) : [Number(item.uid)].filter((uid) => Number.isSafeInteger(uid) && uid > 0);
+    const batch = !send && uids.length > 1;
+    const title = send ? `${L('待发送：')}${item.subject || L('(无主题)')}` : batch
+      ? (I18N_LANG === 'en' ? `Move ${uids.length} emails to Trash` : `待批量移入已删除（${uids.length} 封）`)
+      : L('待移入已删除');
     const details = send
       ? `<div class="mcp-approval-address"><strong>${L('收件人：')}</strong>${escapeHtml(item.to || '')}${item.cc?`<br><strong>${L('抄送：')}</strong>${escapeHtml(item.cc)}`:''}${item.bcc?`<br><strong>${L('密送：')}</strong>${escapeHtml(item.bcc)}`:''}</div><pre class="mcp-approval-preview">${escapeHtml(item.text || L('(无正文)'))}</pre>`
-      : `<div class="mcp-approval-address">${escapeHtml(item.accountEmail || '')} · ${escapeHtml(item.folder || 'INBOX')} · UID ${Number(item.uid) || ''}</div>`;
+      : `<div class="mcp-approval-address">${escapeHtml(item.accountEmail || '')} · ${escapeHtml(item.folder || 'INBOX')} · ${batch ? (I18N_LANG === 'en' ? 'UIDs ' : 'UID ') : 'UID '}${uids.join(I18N_LANG === 'en' ? ', ' : '、')}</div>`;
     const date = item.createdAt ? dateLong(item.createdAt) : '';
-    return `<article class="mcp-approval-card"><div class="mcp-approval-head"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(item.accountLabel || item.accountEmail || '')}${date?` · ${escapeHtml(date)}`:''}</small></div>${details}<div class="mcp-approval-actions"><button class="button button-primary" type="button" data-mcp-approval-action="approve" data-approval-id="${escapeHtml(item.id)}">${send?L('确认并发送'):L('确认移入已删除')}</button><button class="button button-quiet" type="button" data-mcp-approval-action="deny" data-approval-id="${escapeHtml(item.id)}">${L('拒绝')}</button></div></article>`;
+    const approveLabel = send ? L('确认并发送') : batch ? (I18N_LANG === 'en' ? 'Confirm batch move to Trash' : '确认批量移入已删除') : L('确认移入已删除');
+    return `<article class="mcp-approval-card"><div class="mcp-approval-head"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(item.accountLabel || item.accountEmail || '')}${date?` · ${escapeHtml(date)}`:''}</small></div>${details}<div class="mcp-approval-actions"><button class="button button-primary" type="button" data-mcp-approval-action="approve" data-approval-id="${escapeHtml(item.id)}">${approveLabel}</button><button class="button button-quiet" type="button" data-mcp-approval-action="deny" data-approval-id="${escapeHtml(item.id)}">${L('拒绝')}</button></div></article>`;
   }).join('');
 }
 async function pollMcpApprovals() {
@@ -1242,17 +1247,23 @@ $('#mcpApprovalList').addEventListener('click', async (event) => {
   const approval = mcpApprovals.find((item) => item.id === id);
   if (!approval) return;
   const send = approval.kind === 'send_email';
+  const approvalUids = Array.isArray(approval.uids) ? approval.uids.map(Number).filter((uid) => Number.isSafeInteger(uid) && uid > 0) : [Number(approval.uid)].filter((uid) => Number.isSafeInteger(uid) && uid > 0);
+  const batch = !send && approvalUids.length > 1;
   if (button.dataset.mcpApprovalAction === 'approve') {
     const copy = send
       ? `${L('将从 ')}${approval.accountEmail || approval.accountLabel || L('所选邮箱')}${L(' 发送给 ')}${approval.to || L('未指定收件人')}。${L('主题：')}${approval.subject || L('(无主题)')}。\n\n${String(approval.text || '').slice(0,4000)}`
-      : (I18N_LANG === 'en' ? `Move UID ${approval.uid} in ${approval.folder || 'INBOX'} of ${approval.accountEmail || approval.accountLabel || L('所选邮箱')} to Trash. This is not a permanent deletion.` : `将把 ${approval.accountEmail || approval.accountLabel || '所选邮箱'} 中 ${approval.folder || 'INBOX'} 的邮件 UID ${approval.uid} 移入“已删除”。这不是永久删除。`);
-    if (!await askConfirm(send?L('确认发送这封邮件？'):L('确认移入已删除？'), copy, send?L('确认并发送'):L('移入已删除'), true)) return;
+      : (I18N_LANG === 'en'
+        ? `Move ${batch ? `${approvalUids.length} emails (UIDs ${approvalUids.join(', ')})` : `UID ${approvalUids[0] || ''}`} in ${approval.folder || 'INBOX'} of ${approval.accountEmail || approval.accountLabel || L('所选邮箱')} to Trash. This is not a permanent deletion.`
+        : `将把 ${approval.accountEmail || approval.accountLabel || '所选邮箱'} 中 ${approval.folder || 'INBOX'} 的 ${batch ? `${approvalUids.length} 封邮件（UID ${approvalUids.join('、')}）` : `邮件 UID ${approvalUids[0] || ''}`} 移入“已删除”。这不是永久删除。`);
+    const confirmTitle = send ? L('确认发送这封邮件？') : batch ? (I18N_LANG === 'en' ? 'Confirm batch move to Trash?' : '确认批量移入已删除？') : L('确认移入已删除？');
+    const confirmLabel = send ? L('确认并发送') : batch ? (I18N_LANG === 'en' ? 'Move batch to Trash' : '整批移入已删除') : L('移入已删除');
+    if (!await askConfirm(confirmTitle, copy, confirmLabel, true)) return;
   }
   button.disabled = true;
   try {
     if (button.dataset.mcpApprovalAction === 'approve') {
       const result = await api(`/api/mcp/approvals/${encodeURIComponent(id)}/approve`, { method:'POST', body:JSON.stringify({}) });
-      toast(send ? (result.result?.warning || result.result?.message || L('邮件已发送。')) : L('邮件已移入已删除。'), Boolean(result.result?.warning));
+      toast(send ? (result.result?.warning || result.result?.message || L('邮件已发送。')) : batch ? (I18N_LANG === 'en' ? `${result.result?.count || approvalUids.length} emails moved to Trash.` : `${result.result?.count || approvalUids.length} 封邮件已移入已删除。`) : L('邮件已移入已删除。'), Boolean(result.result?.warning));
     } else {
       await api(`/api/mcp/approvals/${encodeURIComponent(id)}/deny`, { method:'POST', body:JSON.stringify({}) });
       toast(L('已拒绝此 MCP 操作。'));

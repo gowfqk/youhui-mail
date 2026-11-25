@@ -134,3 +134,46 @@ test('MCP delete approvals persist in SQLite and are visible to an independent a
   assert.deepEqual(executed, [{ accountId: 'account-1', folder: 'INBOX', uid: 77, action: 'delete' }]);
   assert.deepEqual(await getApprovals(mcpInstance), []);
 });
+
+test('MCP batch deletion creates one approval for all UIDs and executes only after that approval', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'youhui-mcp-batch-approvals-'));
+  const databasePath = path.join(directory, 'mail.sqlite');
+  const token = crypto.randomBytes(32).toString('base64url');
+  const cipher = makeCipher();
+  const db = new Database(databasePath);
+  prepareDatabase(db, token);
+  const executed = [];
+  let instance;
+  t.after(async () => {
+    await stopServer(instance?.server);
+    db.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  instance = await startMcpInstance(db, token, executed, cipher);
+  const toolResponse = await fetch(`${instance.baseUrl}/mcp`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 'delete-batch-1', method: 'tools/call',
+      params: { name: 'manage_email', arguments: { accountId: 'account-1', uids: [77, 78, 79], folder: 'INBOX', action: 'delete' } }
+    })
+  });
+  assert.equal(toolResponse.status, 200);
+  const pending = (await toolResponse.json()).result?.structuredContent;
+  assert.equal(pending?.pendingConfirmation, true);
+  assert.equal(executed.length, 0, 'the batch must remain untouched until approval');
+
+  const visible = await getApprovals(instance);
+  assert.equal(visible.length, 1, 'all requested messages should appear as one approval item');
+  assert.equal(visible[0].id, pending.approvalId);
+  assert.deepEqual(visible[0].uids, [77, 78, 79]);
+  assert.equal(visible[0].folder, 'INBOX');
+
+  const approveResponse = await fetch(`${instance.baseUrl}/api/mcp/approvals/${encodeURIComponent(pending.approvalId)}/approve`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+  });
+  assert.equal(approveResponse.status, 200);
+  assert.deepEqual(executed, [77, 78, 79].map((uid) => ({ accountId: 'account-1', folder: 'INBOX', uid, action: 'delete' })));
+  assert.deepEqual(await getApprovals(instance), []);
+});

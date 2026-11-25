@@ -11,12 +11,13 @@
   <script>try{var _t=localStorage.getItem('youhui_theme');if(_t==='dark'||(!_t&&matchMedia('(prefers-color-scheme: dark)').matches))document.documentElement.setAttribute('data-theme','dark')}catch(e){}</script>
   <title>邮汇 · 邮箱工作台</title>
   <link rel="stylesheet" href="/style-240c21bedfe6.css">
-  <link rel="stylesheet" href="/redesign-theme-27f42c5bbe32.css">
+  <link rel="stylesheet" href="/redesign-theme-352ed6c93daf.css">
   <link rel="stylesheet" href="/brand-icon-8631112507a5.css">
-  <script src="/mail-list-cache-ac9b47cad340.js" defer></script>
+  <script src="/mail-list-cache-f126d93b8f75.js" defer></script>
   <script src="/message-context-actions-d7ff3ca0c130.js" defer></script>
-  <script src="/i18n-en-1512eac03dd9.js" defer></script>
-  <script src="/app-0cb18f20fdd9.js" defer></script>
+  <script src="/mail-list-filters-d87fab49ea70.js" defer></script>
+  <script src="/i18n-en-84d62ecae74e.js" defer></script>
+  <script src="/app-5f3d474953c1.js" defer></script>
 </head>
 <body>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
@@ -91,6 +92,13 @@
           <div class="list-toolbar">
             <div class="list-heading"><h1 id="listTitle">收件箱</h1><span id="messageCount" class="count-pill">—</span></div>
             <div class="list-tools"><select id="accountFilter" aria-label="筛选邮箱"><option value="all">所有邮箱</option></select><button id="sortButton" class="icon-button small-tool" title="按时间排序">↕</button><button id="threadButton" class="icon-button small-tool" title="Thread view / 会话视图">💬</button></div>
+          </div>
+          <div id="listFilterTabs" class="list-filter-tabs" role="group" aria-label="筛选当前已加载邮件">
+            <button class="active" type="button" data-list-filter="all" aria-pressed="true">全部</button>
+            <button type="button" data-list-filter="unread" aria-pressed="false">未读</button>
+            <button type="button" data-list-filter="verification" aria-pressed="false">验证码</button>
+            <button type="button" data-list-filter="attachments" aria-pressed="false">含附件</button>
+            <span class="filter-scope-note" title="仅筛选当前已加载的邮件">当前页</span>
           </div>
           <div id="syncBanner" class="sync-banner hidden"></div>
           <div id="messageList" class="message-list"></div>

@@ -8,6 +8,7 @@ import { sanitizeEmailHtml, normalizeContentId } from './email-html.js';
 import { securityHeadersForPath } from './security-policy.js';
 import { makePinnedLookup, validatedAddresses } from './net-guard.js';
 import { extractVerificationCode } from './verification-code.js';
+import { countAttachments } from './mail-list-metadata.js';
 import { hashPassword, verifyPassword, passwordNeedsRehash } from './password-hash.js';
 import { BACKUP_MAGIC, BACKUP_ENCRYPTED_MAGIC, BACKUP_MAX_BYTES, parseBackupFile, decryptWithKey, fileSha256Hex, encryptBackupFileStreaming } from './backup-file.js';
 import https from 'node:https';
@@ -765,13 +766,19 @@ async function fetchMessages(account, folderKey, page, limit, query, { beforeUid
           }
           matched += seqs.length;
           if (!seqs.length) continue;
-          const fetched = await client.fetchAll(seqs, { uid: true, envelope: true, flags: true, internalDate: true, size: true });
-          allStarred.push(...fetched.map((item) => ({
-            accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: mailbox.path,
-            subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
-            date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
-            flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0
-          })));
+          let fetched;
+          try { fetched = await client.fetchAll(seqs, { uid: true, envelope: true, flags: true, internalDate: true, size: true, bodyStructure: true }); }
+          catch { fetched = await client.fetchAll(seqs, { uid: true, envelope: true, flags: true, internalDate: true, size: true }); }
+          allStarred.push(...fetched.map((item) => {
+            const attachmentCount = countAttachments(item.bodyStructure);
+            return {
+              accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: mailbox.path,
+              subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
+              date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
+              flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0,
+              attachmentCount, hasAttachments: attachmentCount > 0
+            };
+          }));
         } catch (error) { console.warn(`Starred search skipped mailbox ${mailbox.path}: ${safeError(error)}`); }
         finally { lock?.release(); }
       }
@@ -817,14 +824,21 @@ async function fetchMessages(account, folderKey, page, limit, query, { beforeUid
       const start = (page - 1) * limit;
       const pageSeqs = beforeUid ? seqs : seqs.slice(start, start + limit);
       if (!pageSeqs.length) return { accountId: account.id, path: pathName, messages: [], total: matched };
-const fetched = await client.fetchAll(pageSeqs.join(','), { uid: true, envelope: true, flags: true, internalDate: true, size: true });
-      const messages = fetched.map((item) => ({
-        accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: pathName,
-        subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
-        date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
-        flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0,
-        threadKey: normalizeThreadKey(item.envelope?.subject || '')
-      }));
+      let fetched;
+      const listFields = { uid: true, envelope: true, flags: true, internalDate: true, size: true };
+      try { fetched = await client.fetchAll(pageSeqs.join(','), { ...listFields, bodyStructure: true }); }
+      catch { fetched = await client.fetchAll(pageSeqs.join(','), listFields); }
+      const messages = fetched.map((item) => {
+        const attachmentCount = countAttachments(item.bodyStructure);
+        return {
+          accountId: account.id, accountEmail: account.email, accountLabel: account.label, uid: item.uid, folder: pathName,
+          subject: item.envelope?.subject || '(无主题)', from: messageAddress(item.envelope, 'from'), to: messageAddress(item.envelope, 'to'),
+          date: item.internalDate || item.envelope?.date || null, unread: !(item.flags || new Set()).has('\\Seen'),
+          flagged: (item.flags || new Set()).has('\\Flagged'), size: item.size || 0,
+          attachmentCount, hasAttachments: attachmentCount > 0,
+          threadKey: normalizeThreadKey(item.envelope?.subject || '')
+        };
+      });
       messages.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
       return { accountId: account.id, path: pathName, messages, total: matched };
     } finally { lock.release(); }

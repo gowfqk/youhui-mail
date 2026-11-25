@@ -1,6 +1,6 @@
 /* Youhui Mail — production-safe visual redesign.
- * This stylesheet intentionally targets the production DOM. It changes presentation only;
- * app.js, message structure, and the independent list/detail scroll containers remain intact.
+ * This stylesheet targets the production DOM and preserves the existing mail-client body.
+ * The reader scroll surface and fixed reply dock stay separate from the independently scrolling list.
  */
 
 :root {
@@ -534,4 +534,185 @@ dialog::backdrop {
     width: 34px;
     height: 34px;
   }
+}
+
+
+/* Preview additions: loaded-page filters, one-time codes and quick actions. */
+.list-filter-tabs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 48px;
+  padding: 8px 16px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--yh-border);
+  background: var(--yh-bg-surface);
+  scrollbar-width: none;
+}
+
+.list-filter-tabs::-webkit-scrollbar { display: none; }
+
+.list-filter-tabs button {
+  flex: 0 0 auto;
+  min-height: 29px;
+  padding: 0 12px;
+  border: 1px solid var(--yh-border);
+  border-radius: 999px;
+  background: var(--yh-bg-subtle);
+  color: var(--yh-text-sec);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  transition: background .14s ease, color .14s ease, border-color .14s ease;
+}
+
+.list-filter-tabs button:hover { border-color: var(--yh-border-strong); background: var(--yh-bg-hover); }
+.list-filter-tabs button.active { border-color: transparent; background: var(--yh-text); color: var(--yh-bg-surface); }
+.filter-scope-note { flex: 0 0 auto; margin-left: auto; color: var(--yh-text-muted); font-size: 9px; white-space: nowrap; }
+
+#messageList { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
+.list-filter-empty { padding: 28px 16px; color: var(--yh-text-muted); font-size: 11px; line-height: 1.6; text-align: center; }
+.message-foot { gap: 7px; }
+.message-badges { display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; overflow: hidden; }
+.message-badges .mail-chip { flex: 0 1 auto; min-width: 0; }
+.otp-chip, .attachment-chip {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid var(--yh-border);
+  border-radius: 999px;
+  background: var(--yh-bg-active);
+  color: var(--yh-accent-text);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.attachment-chip { background: var(--yh-bg-subtle); color: var(--yh-text-muted); }
+
+/* The reading copy scrolls independently from the list; the reply dock stays visible. */
+.detail-pane {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.detail-scroll-area {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+.detail-scroll-area > .detail-view { margin: 0 auto; }
+.detail-pane > .loading { flex: 1 1 auto; }
+.detail-placeholder { z-index: 1; }
+
+.verification-code-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: 16px 0 0;
+  padding: 13px 15px;
+  border: 1px solid rgba(19, 125, 114, .22);
+  border-radius: 13px;
+  background: var(--yh-bg-active);
+}
+.verification-code-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.verification-code-copy > span { color: var(--yh-accent-text); font-size: 10px; font-weight: 650; }
+.verification-code-copy > strong { color: var(--yh-text); font: 750 24px/1.1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: .08em; }
+.copy-verification-code {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--yh-accent);
+  color: #fff;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+}
+.copy-verification-code:hover { background: var(--yh-accent-hover); }
+
+.ai-summary-button {
+  flex: 0 0 auto;
+  min-height: 35px;
+  padding: 0 10px;
+  border: 1px solid var(--yh-border);
+  border-radius: 10px;
+  background: var(--yh-bg-active);
+  color: var(--yh-accent-text);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.ai-summary-button:hover { border-color: var(--yh-border-strong); background: var(--yh-accent-soft); }
+
+.detail-actions-bottom {
+  z-index: 4;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 11px clamp(24px, 4vw, 52px) calc(11px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--yh-border) !important;
+  background: var(--yh-bg-surface);
+}
+.quick-reply-form { display: flex; align-items: center; gap: 8px; }
+.quick-reply-form input {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 40px;
+  padding: 0 13px;
+  border: 1px solid var(--yh-border-strong);
+  border-radius: 999px;
+  background: var(--yh-bg-subtle);
+  color: var(--yh-text);
+  font: inherit;
+  font-size: 11px;
+}
+.quick-reply-form input::placeholder { color: var(--yh-text-muted); }
+.quick-reply-form input:focus { border-color: var(--yh-accent); outline: 3px solid var(--yh-accent-soft); }
+.quick-reply-form .button { flex: 0 0 auto; min-height: 40px; padding: 0 15px; border-radius: 999px; font-size: 10px; }
+.quick-reply-form .button:disabled { cursor: wait; opacity: .65; }
+.quick-reply-full {
+  display: block;
+  margin: 5px 0 0 auto;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--yh-text-muted);
+  font: inherit;
+  font-size: 9px;
+}
+.quick-reply-full:hover { color: var(--yh-accent-text); }
+
+@media (max-width: 800px) {
+  .list-pane,
+  .detail-pane { background: var(--yh-bg-surface) !important; }
+  .detail-pane { display: none; }
+  .detail-pane.mobile-open { display: flex; }
+  .app-shell.mobile-reading .detail-toolbar .icon-button { width: 38px; min-width: 38px; height: 42px; min-height: 42px; flex: 0 0 38px; }
+  .app-shell.mobile-reading .detail-actions { min-width: 0; flex: 1 1 0; gap: 2px; justify-content: flex-start; overflow-x: auto; scrollbar-width: none; }
+  .app-shell.mobile-reading .detail-actions::-webkit-scrollbar { display: none; }
+  .app-shell.mobile-reading .ai-summary-button { width: 38px; min-width: 38px; min-height: 38px; padding: 0; overflow: hidden; font-size: 0; }
+  .app-shell.mobile-reading .ai-summary-button::before { content: "✦"; font-size: 15px; }
+  .list-filter-tabs { min-height: 43px; gap: 6px; padding: 7px 12px; }
+  .list-filter-tabs button { min-height: 29px; padding: 0 10px; font-size: 9px; }
+  .filter-scope-note { font-size: 8px; }
+  .detail-actions-bottom { max-width: none; padding: 8px max(12px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+  .quick-reply-form { gap: 6px; }
+  .quick-reply-form input { height: 42px; font-size: 13px; }
+  .quick-reply-form .button { min-height: 42px; padding: 0 13px; }
+  .quick-reply-full { display: none; }
+}
+
+@media (max-width: 500px) {
+  .verification-code-card { gap: 9px; margin-top: 12px; padding: 11px 12px; }
+  .verification-code-copy > strong { font-size: 22px; }
+  .copy-verification-code { min-height: 34px; padding: 0 10px; }
+  .ai-summary-button { min-height: 32px; padding: 0 8px; font-size: 9px; }
 }

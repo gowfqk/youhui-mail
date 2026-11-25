@@ -46,7 +46,9 @@
       from,
       date,
       unread: message.unread === true,
-      flagged: message.flagged === true
+      flagged: message.flagged === true,
+      attachmentCount: Math.max(0, Math.min(100, Math.floor(Number(message.attachmentCount) || 0))),
+      hasAttachments: message.hasAttachments === true || Number(message.attachmentCount) > 0
     };
   }
 

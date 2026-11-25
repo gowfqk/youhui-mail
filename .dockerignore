@@ -9,6 +9,7 @@
 !security-policy.js
 !net-guard.js
 !verification-code.js
+!mail-list-metadata.js
 !password-hash.js
 !backup-file.js
 !mail-frame.html

@@ -1,6 +1,6 @@
 const state = {
   status: null, accounts: [], defaultAccountId: '', folders: [], folder: 'INBOX', accountId: 'all', cursor: null, cursorStack: [], query: '',
-  messages: [], total: 0, selected: null, detail: null, olderFirst: false, threadView: false, busy: false, searchTimer: null, mailListRequestId: 0,
+  messages: [], total: 0, selected: null, detail: null, olderFirst: false, threadView: false, listFilter: 'all', busy: false, searchTimer: null, mailListRequestId: 0,
   aiConfig: null, translationConfig: null, notificationConfig: null, oauthConfig: null, mcpConfig: null, aiMessages: [], aiContext: null, aiBusy: false
 };
 // ---- 语言 / i18n：zh 为默认，localStorage 记忆，切换后整页刷新 ----
@@ -59,7 +59,7 @@ function toggleLanguage() {
 document.addEventListener('keydown', (event) => {
   if (event.target.matches('input,textarea,select,[contenteditable]') || event.ctrlKey || event.metaKey || event.altKey) return;
   if (!$('#appView') || $('#appView').classList.contains('hidden')) return;
-  const rows = state.messages;
+  const rows = visibleMessageEntries().map(({ message }) => message);
   const idx = rows.findIndex((m) => sameMessage(m, state.selected));
   const next = (delta) => {
     const target = rows[Math.max(0, Math.min(rows.length - 1, idx + delta))];
@@ -68,7 +68,7 @@ document.addEventListener('keydown', (event) => {
   switch (event.key) {
     case 'j': case 'ArrowDown': event.preventDefault(); next(1); break;
     case 'k': case 'ArrowUp': event.preventDefault(); next(-1); break;
-    case 'Enter': if (idx >= 0) { event.preventDefault(); openMessage(idx); } break;
+    case 'Enter': if (idx >= 0) { event.preventDefault(); openMessage(state.messages.indexOf(rows[idx])); } break;
     case 'a': if (idx >= 0) { event.preventDefault(); performMessageAction('archive', rows[idx]); } break;
     case 'x': if (idx >= 0) { event.preventDefault(); performMessageAction('delete', rows[idx]); } break;
     case 's': if (idx >= 0) { event.preventDefault(); performMessageAction(rows[idx].flagged ? 'unstar' : 'star', rows[idx]); } break;
@@ -90,6 +90,18 @@ document.addEventListener('click', (event) => {
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const mailListCache = window.YouhuiMailListCache.create();
+const listFilters = window.YouhuiMailListFilters;
+function visibleMessageEntries() {
+  return state.messages.map((message, index) => ({ message, index }))
+    .filter(({ message }) => listFilters.matchesFilter(message, state.listFilter));
+}
+function updateListFilterTabs() {
+  $$('[data-list-filter]', $('#listFilterTabs')).forEach((button) => {
+    const active = button.dataset.listFilter === state.listFilter;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+}
 window.addEventListener('message', (event) => {
   const frame = $('#mailBody .mail-body-frame');
   if (!frame || event.source !== frame.contentWindow || !event.data || typeof event.data !== 'object' || event.data.type !== 'youhui-mail-frame-height') return;
@@ -403,19 +415,23 @@ function renderMessages() {
   const list = $('#messageList');
   closeMessageContextMenu();
   const scrollTop = list.scrollTop;
-  list.innerHTML = state.messages.map((m, index) => {
+  const entries = visibleMessageEntries();
+  updateListFilterTabs();
+  list.innerHTML = entries.length ? entries.map(({ message: m, index }) => {
     const sender = m.from?.[0]?.name || m.from?.[0]?.address || L('未知发件人');
     const fromEmail = m.from?.[0]?.address || '';
     const account = state.accounts.find((a) => a.id === m.accountId);
-    const preview = fromEmail && sender !== fromEmail ? fromEmail : (account && state.accounts.length > 1 ? account.email : '');
+    const preview = m.snippet || m.preview || (fromEmail && sender !== fromEmail ? fromEmail : (account && state.accounts.length > 1 ? account.email : ''));
+    const code = m.verificationCode || listFilters.extractVerificationCode(m.subject || '');
+    const attachmentCount = Math.max(0, Math.min(100, Math.floor(Number(m.attachmentCount) || 0)));
     const selected = state.selected && state.selected.uid === m.uid && state.selected.accountId === m.accountId;
     const threadBadge = m.threadCount > 1 ? `<span class="thread-badge">${m.threadCount}</span>` : '';
     return `<article class="message-row ${m.unread?'unread':''} ${selected?'selected':''}" data-idx="${index}" tabindex="0" role="button" aria-haspopup="menu" aria-expanded="false" aria-label="${L('打开邮件：')}${escapeHtml(m.subject)}">
       <span class="sender-avatar ${colorClass(fromEmail || sender)}">${escapeHtml(initials(sender))}</span>
       <div class="message-content"><div class="message-line"><span class="message-sender">${escapeHtml(sender)}${threadBadge}</span><time class="message-time">${escapeHtml(dateShort(m.date))}</time></div>
       <div class="message-subject">${escapeHtml(m.subject || L('(无主题)'))}</div><div class="message-preview">${escapeHtml(preview || L('点击查看邮件内容'))}</div>
-      <div class="message-foot"><span class="mail-chip">${escapeHtml(account?.label || account?.email || m.accountEmail || '')}</span>${m.flagged?'<span class="star-mark">★</span>':''}</div></div></article>`;
-  }).join('');
+      <div class="message-foot"><span class="message-badges"><span class="mail-chip">${escapeHtml(account?.label || account?.email || m.accountEmail || '')}</span>${code?`<span class="otp-chip">OTP ${escapeHtml(code)}</span>`:''}${attachmentCount?`<span class="attachment-chip" aria-label="${L('含附件')}">⌑ ${attachmentCount}</span>`:''}</span>${m.flagged?'<span class="star-mark">★</span>':''}</div></div></article>`;
+  }).join('') : `<div class="list-filter-empty">${L('当前页没有符合条件的邮件。')}</div>`;
   $$('.message-row', list).forEach((row) => {
     row.addEventListener('click', () => openMessage(Number(row.dataset.idx)));
     row.addEventListener('contextmenu', (event) => {
@@ -602,6 +618,14 @@ function normalizeClientCid(value = '') {
   try { cid = decodeURIComponent(cid); } catch {}
   return cid.toLowerCase();
 }
+function detailBodyPlainText(detail) {
+  if (String(detail?.text || '').trim()) return String(detail.text);
+  if (!detail?.html) return '';
+  const template = document.createElement('template');
+  template.innerHTML = String(detail.html);
+  template.content.querySelectorAll('script,style,noscript,template').forEach((node) => node.remove());
+  return template.content.textContent || '';
+}
 async function openMessage(index) {
   const message = state.messages[index]; if (!message) return;
   state.selected = message; state.detail = null; updateAIControls(); renderMessages();
@@ -613,6 +637,10 @@ async function openMessage(index) {
     // attachments=meta：只取附件元数据；附件与超预算的内嵌图按需从附件端点获取
     const params = new URLSearchParams({ folder:message.folder || state.folder, attachments:'meta' });
     const detail = await api(`/api/message/${encodeURIComponent(message.accountId)}/${message.uid}?${params}`);
+    const bodyText = detailBodyPlainText(detail);
+    const previewText = bodyText.replace(/\s+/g, ' ').trim();
+    if (previewText) message.snippet = previewText.slice(0, 180);
+    message.verificationCode = message.verificationCode || listFilters.extractVerificationCode(`${detail.subject || ''}\n${bodyText}`);
     state.detail = detail; message.unread = false; renderMessages(); renderDetail(detail, message); updateAIControls();
   } catch (error) { pane.innerHTML = `<div class="detail-placeholder"><div class="placeholder-icon">!</div><h2>${L('邮件读取失败')}</h2><p>${escapeHtml(error.message)}</p><button class="button button-quiet detail-back">${L('返回')}</button></div>`; $('.detail-back', pane)?.addEventListener('click', closeDetailMobile); }
 }
@@ -620,21 +648,24 @@ function renderDetail(detail, message) {
   const account = state.accounts.find((a) => a.id === detail.accountId);
   const sender = detail.from?.[0]?.name || detail.from?.[0]?.address || L('未知发件人');
   const to = addressText(detail.to) || detail.email;
+  const verificationCode = message.verificationCode || listFilters.extractVerificationCode(`${detail.subject || ''}\n${detailBodyPlainText(detail)}`);
+  if (verificationCode) message.verificationCode = verificationCode;
   const pane = $('#detailPane'); pane.classList.remove('empty-detail');
-  pane.innerHTML = `<article class="detail-view">
+  pane.innerHTML = `<div id="detailScrollArea" class="detail-scroll-area"><article class="detail-view">
     <div class="detail-toolbar"><button class="icon-button detail-back" data-action="back" aria-label="${L('返回邮件列表')}" title="${L('返回')}">←</button><div class="detail-actions">
       <button class="icon-button" data-action="archive" title="${L('归档')}" aria-label="${L('归档')}">▣</button><button class="icon-button" data-action="delete" title="${L('移到已删除')}" aria-label="${L('移到已删除')}">⌫</button>
-      <button class="icon-button" data-action="${message.unread?'read':'unread'}" title="${message.unread?L('标为已读'):L('标为未读')}" aria-label="${message.unread?L('标为已读'):L('标为未读')}">◉</button><button class="icon-button" data-action="${message.flagged?'unstar':'star'}" title="${message.flagged?L('取消星标'):L('加星标')}" aria-label="${message.flagged?L('取消星标'):L('加星标')}">${message.flagged?'★':'☆'}</button><button class="icon-button" data-action="translate" title="${L('使用已配置的专用翻译 API 翻译为简体中文')}" aria-label="${L('翻译为简体中文')}">译</button><button class="icon-button" data-action="eml" title="${L('导出为 .eml 文件')}" aria-label="${L('导出为 .eml 文件')}">⬇</button>
+      <button class="icon-button" data-action="${message.unread?'read':'unread'}" title="${message.unread?L('标为已读'):L('标为未读')}" aria-label="${message.unread?L('标为已读'):L('标为未读')}">◉</button><button class="icon-button" data-action="${message.flagged?'unstar':'star'}" title="${message.flagged?L('取消星标'):L('加星标')}" aria-label="${message.flagged?L('取消星标'):L('加星标')}">${message.flagged?'★':'☆'}</button><button class="icon-button" data-action="translate" title="${L('使用已配置的专用翻译 API 翻译为简体中文')}" aria-label="${L('翻译为简体中文')}">译</button><button class="icon-button" data-action="eml" title="${L('导出为 .eml 文件')}" aria-label="${L('导出为 .eml 文件')}">⬇</button><button class="ai-summary-button" data-action="ai-summary" type="button" title="${L('AI 总结')}" aria-label="${L('AI 总结')}">✦ ${L('AI 总结')}</button>
     </div><button class="icon-button" data-action="refresh" title="${L('刷新邮件')}">⟳</button></div>
     <h1 class="detail-subject">${escapeHtml(detail.subject || L('(无主题)'))}</h1>
     <div class="sender-meta"><span class="sender-avatar ${colorClass(detail.from?.[0]?.address || sender)}">${escapeHtml(initials(sender))}</span><div class="sender-info"><div class="sender-info-main"><strong>${escapeHtml(sender)}</strong><span>&lt;${escapeHtml(detail.from?.[0]?.address || '')}&gt;</span></div><div class="sender-detail-line">${L('发给 ')}${escapeHtml(to)}${detail.cc?.length ? ` · ${L('抄送 ')}${escapeHtml(addressText(detail.cc))}` : ''}</div></div><time class="detail-date">${escapeHtml(dateLong(detail.date))}</time></div>
+    ${verificationCode ? `<section class="verification-code-card" aria-label="${L('检测到一次性验证码')}" aria-live="polite"><div class="verification-code-copy"><span>${L('检测到一次性验证码')}</span><strong>${escapeHtml(verificationCode)}</strong></div><button type="button" class="copy-verification-code" data-copy-verification-code="${escapeHtml(verificationCode)}">${L('复制验证码')}</button></section>` : ''}
     <div class="detail-divider"></div>
     <div class="mail-body" id="mailBody"></div>
     <section id="mailTranslation" class="mail-translation hidden" aria-live="polite" aria-label="${L('简体中文译文')}"></section>
     ${detail.attachments?.length ? `<div class="attachment-list">${detail.attachments.map((a,i)=>`<a class="attachment-link" download="${escapeHtml(a.filename)}" href="/api/message/${encodeURIComponent(detail.accountId)}/${encodeURIComponent(message.uid)}/attachment/${i}?folder=${encodeURIComponent(message.folder || state.folder)}"><span class="attachment-icon">⌑</span><span>${escapeHtml(a.filename)}<br><small>${escapeHtml(formatSize(a.size))}</small></span></a>`).join('')}</div>`:''}
     <div class="detail-account-tag"><span class="status-dot"></span>${escapeHtml(account?.label || account?.email || detail.email)} · ${L('原始邮箱')}</div>
-    <div class="detail-actions-bottom"><button class="button button-primary" data-action="reply">↶ ${L('回复')}</button></div>
-  </article>`;
+  </article></div><div class="detail-actions-bottom"><form id="quickReplyForm" class="quick-reply-form" aria-label="${L('快速回复')}"><input id="quickReplyText" type="text" maxlength="12000" required autocomplete="off" aria-label="${L('快速回复')} ${escapeHtml(sender)}" placeholder="${L('快速回复 ')}${escapeHtml(sender)}…"><button id="quickReplySend" class="button button-primary" type="submit">➤ ${L('发送')}</button></form><button class="quick-reply-full" type="button" data-action="reply">↶ ${L('在完整撰写器中回复')}</button></div>`;
+  $('#detailScrollArea', pane).scrollTop = 0;
   const body = $('#mailBody', pane);
   if (detail.html) {
     const emailHtml = String(detail.html);
@@ -683,6 +714,50 @@ function renderDetail(detail, message) {
     body.append(frame);
   } else { const pre = document.createElement('div'); pre.className='mail-body-text'; pre.textContent = detail.text || L('(此邮件没有可显示的正文。)'); body.append(pre); }
   $$('[data-action]', pane).forEach((button) => button.addEventListener('click', () => handleDetailAction(button.dataset.action, message, detail)));
+  $('#quickReplyForm', pane).addEventListener('submit', (event) => { void sendQuickReply(event, detail); });
+  $$('[data-copy-verification-code]', pane).forEach((button) => button.addEventListener('click', () => { void copyVerificationCode(button.dataset.copyVerificationCode); }));
+}
+async function sendQuickReply(event, detail) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const input = $('#quickReplyText', form);
+  const button = $('#quickReplySend', form);
+  const text = input.value.trim();
+  const to = detail.from?.[0]?.address || '';
+  if (!text || button.disabled) return;
+  if (!to) return toast(L('未能识别发件人地址，无法准备回复草稿。'), true);
+  button.disabled = true;
+  try {
+    const subject = String(detail.subject || '');
+    const payload = {
+      accountId: detail.accountId, to,
+      subject: /^re:/i.test(subject) ? subject : `Re: ${subject}`,
+      text, attachments: [],
+      inReplyTo: detail.messageId || detail.inReplyTo || '',
+      references: [detail.references, detail.messageId].filter(Boolean).join(' ')
+    };
+    const result = await api('/api/send', { method:'POST', body:JSON.stringify(payload) });
+    input.value = '';
+    toast(result.warning || result.message || L('邮件已发送。'), Boolean(result.warning));
+    if (state.folder === 'Sent') await loadMessages();
+  } catch (error) { toast(error.message || L('发送失败，请稍后重试。'), true); }
+  finally { button.disabled = false; }
+}
+async function copyVerificationCode(code) {
+  const value = String(code || '').trim();
+  if (!value) return;
+  try {
+    if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+    else {
+      const field = document.createElement('textarea');
+      field.value = value; field.setAttribute('readonly', '');
+      field.style.position = 'fixed'; field.style.opacity = '0';
+      document.body.append(field); field.select();
+      const copied = document.execCommand('copy'); field.remove();
+      if (!copied) throw new Error('Clipboard unavailable');
+    }
+    toast(L('验证码已复制。'));
+  } catch { toast(L('无法复制验证码，请手动选择。'), true); }
 }
 function closeDetailMobile() {
   $('#detailPane').classList.remove('mobile-open');
@@ -691,6 +766,7 @@ function closeDetailMobile() {
 async function handleDetailAction(action, message, detail) {
   if (action === 'back') return closeDetailMobile();
   if (action === 'refresh') return openMessage(state.messages.findIndex((m) => m.uid === message.uid && m.accountId === message.accountId));
+  if (action === 'ai-summary') { openAIChat(); if (state.aiConfig?.configured) $('#aiExplainButton').click(); return; }
   if (action === 'translate') return translateEmail(detail);
   if (action === 'eml') {
     const folder = message.folder || state.folder;
@@ -1017,6 +1093,13 @@ $('#refreshButton').addEventListener('click',async()=>{
   await loadFolders(); await loadMessages(); toast('已从邮箱服务器刷新。');
 });
 $('#accountFilter').addEventListener('change',event=>{state.accountId=event.target.value;state.cursor=null;state.cursorStack.length=0;renderAccountNav();loadMessages();});
+$('#listFilterTabs').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-list-filter]');
+  if (!button || button.dataset.listFilter === state.listFilter) return;
+  state.listFilter = button.dataset.listFilter;
+  $('#messageList').scrollTop = 0;
+  renderMessages();
+});
 $('#accountNav').addEventListener('click',event=>{const button=event.target.closest('[data-account]');if(!button)return;state.accountId=button.dataset.account;state.cursor=null;state.cursorStack.length=0;renderAccountFilter();renderAccountNav();loadMessages();});
 $$('.folder-nav [data-folder]').forEach(button=>button.addEventListener('click',()=>setFolder(button.dataset.folder)));
 $('#searchInput').addEventListener('input',event=>{clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.cursor=null;state.cursorStack.length=0;state.searchTimer=setTimeout(loadMessages,350);});
@@ -1468,7 +1551,7 @@ function makeAIEmailContext(detail = state.detail) {
     subject: String(detail.subject || '(无主题)'),
     from: addressText(detail.from || []),
     date: dateLong(detail.date),
-    text: String(detail.text || '').slice(0, 12_000)
+    text: detailBodyPlainText(detail).slice(0, 12_000)
   };
 }
 function makeAIReplyContext(detail = state.detail) {

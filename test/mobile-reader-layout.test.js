@@ -22,4 +22,18 @@ test('mobile reader expands into the viewport and keeps message actions reachabl
   assert.match(stylesheet, /\.detail-pane\{[^}]*overflow-y:auto/);
   assert.match(themeStyles, /\.workspace\s*\{\s*padding:\s*0 !important;\s*gap:\s*0 !important;/);
   assert.match(themeStyles, /\.list-pane,\s*\.detail-pane\s*\{\s*border:\s*0 !important;\s*border-radius:\s*0 !important;/);
+  assert.match(themeStyles, /\.app-shell\.mobile-reading \.sender-meta\s*\{[^}]*padding:\s*0;/);
+  assert.match(themeStyles, /\.app-shell\.mobile-reading \.mail-body iframe\s*\{[^}]*max-width:\s*100%/);
+});
+
+test('redesign theme targets production mail components with stronger visual hierarchy', () => {
+  const themeStyles = read('../public/redesign-theme.css');
+
+  assert.match(themeStyles, /\.list-pane,\s*\.detail-pane\s*\{\s*background:\s*var\(--yh-bg-surface\)/);
+  assert.match(themeStyles, /\.message-row\s*\{[^}]*border-radius:\s*13px !important/);
+  assert.match(themeStyles, /\.message-row\.selected,\s*\.message-row\.unread\.selected\s*\{/);
+  assert.match(themeStyles, /\.detail-view\s*\{[^}]*max-width:\s*960px/);
+  assert.match(themeStyles, /\.sender-meta\s*\{[^}]*background:\s*var\(--yh-bg-subtle\)/);
+  assert.match(themeStyles, /\.attachment-link\s*\{/);
+  assert.doesNotMatch(themeStyles, /\.(?:message-card|detail-body|detail-sender-card)\b/);
 });

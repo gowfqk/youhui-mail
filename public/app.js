@@ -119,6 +119,7 @@ let mailboxStatusLastPoll = 0;
 let mailboxStatusPollTimer = null;
 let mailboxStatusPollInFlight = false;
 let mcpApprovals = [];
+let mcpApprovalPollError = false;
 let mcpTokenRevealPermission = '';
 async function api(url, options = {}) {
   const response = await fetch(url, { credentials: 'same-origin', ...options, headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers || {}) } });
@@ -237,9 +238,9 @@ async function startExternalLogin(provider, flow = 'login') {
 $$('[data-external-login]').forEach((button) => button.addEventListener('click', () => startExternalLogin(button.dataset.externalLogin, 'login')));
 async function showApp() {
   $('#authView').classList.add('hidden'); $('#appView').classList.remove('hidden');
+  startMcpApprovalPolling();
   await loadAccounts(); await loadFolders(); await loadMessages(); await loadAIConfig(); await loadTranslationConfig(); await loadNotificationConfig(); await loadOAuthConfig();
   startNotificationPolling();
-  startMcpApprovalPolling();
   startMailboxStatusPolling();
 }
 async function refreshMailboxStatuses() {
@@ -1188,9 +1189,14 @@ function renderMcpApprovals() {
   const root = $('#mcpApprovalList');
   const banner = $('#mcpApprovalBanner');
   const list = Array.isArray(mcpApprovals) ? mcpApprovals : [];
-  banner.classList.toggle('hidden', list.length === 0 || $('#appView').classList.contains('hidden'));
-  $('#mcpApprovalBannerText').textContent = list.length ? (I18N_LANG === 'en' ? `${list.length} MCP mail actions awaiting confirmation` : `有 ${list.length} 项待确认的 MCP 邮件操作`) : L('有待确认的 MCP 邮件操作');
-  if (!list.length) { root.innerHTML = `<div class="settings-empty">${L('目前没有待确认操作。')}</div>`; return; }
+  banner.classList.toggle('hidden', (!list.length && !mcpApprovalPollError) || $('#appView').classList.contains('hidden'));
+  $('#mcpApprovalBannerText').textContent = mcpApprovalPollError
+    ? L('暂时无法检查待确认操作，点击查看并重试。')
+    : list.length ? (I18N_LANG === 'en' ? `${list.length} MCP mail actions awaiting confirmation` : `有 ${list.length} 项待确认的 MCP 邮件操作`) : L('有待确认的 MCP 邮件操作');
+  if (!list.length) {
+    root.innerHTML = `<div class="settings-empty">${mcpApprovalPollError ? L('暂时无法读取待确认操作，请稍后重试。') : L('目前没有待确认操作。')}</div>`;
+    return;
+  }
   root.innerHTML = list.map((item) => {
     const send = item.kind === 'send_email';
     const title = send ? `${L('待发送：')}${item.subject || L('(无主题)')}` : L('待移入已删除');
@@ -1204,8 +1210,15 @@ function renderMcpApprovals() {
 async function pollMcpApprovals() {
   if (mcpApprovalPollInFlight || $('#appView').classList.contains('hidden')) return;
   mcpApprovalPollInFlight = true;
-  try { const data = await api('/api/mcp/approvals'); mcpApprovals = Array.isArray(data.approvals) ? data.approvals : []; renderMcpApprovals(); }
-  catch {}
+  try {
+    const data = await api('/api/mcp/approvals');
+    mcpApprovals = Array.isArray(data.approvals) ? data.approvals : [];
+    mcpApprovalPollError = false;
+    renderMcpApprovals();
+  } catch {
+    mcpApprovalPollError = true;
+    renderMcpApprovals();
+  }
   finally { mcpApprovalPollInFlight = false; }
 }
 function startMcpApprovalPolling() {
@@ -1215,9 +1228,13 @@ function startMcpApprovalPolling() {
 }
 function stopMcpApprovalPolling() {
   if (mcpApprovalPollTimer) clearInterval(mcpApprovalPollTimer);
-  mcpApprovalPollTimer = null; mcpApprovalPollInFlight = false; mcpApprovals = [];
+  mcpApprovalPollTimer = null; mcpApprovalPollInFlight = false; mcpApprovals = []; mcpApprovalPollError = false;
   if ($('#mcpApprovalBanner')) $('#mcpApprovalBanner').classList.add('hidden');
 }
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) void pollMcpApprovals();
+});
+window.addEventListener('focus', () => { void pollMcpApprovals(); });
 $('#mcpApprovalList').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-mcp-approval-action]');
   if (!button) return;

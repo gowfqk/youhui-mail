@@ -127,6 +127,7 @@ let notificationPollTimer = null;
 let notificationPollInFlight = false;
 let mcpApprovalPollTimer = null;
 let mcpApprovalPollInFlight = false;
+let mcpApproveAllTimer = null;
 let mailboxStatusLastPoll = 0;
 let mailboxStatusPollTimer = null;
 let mailboxStatusPollInFlight = false;
@@ -1307,6 +1308,16 @@ function renderMcpApprovals() {
     const approveLabel = send ? L('确认并发送') : batch ? (I18N_LANG === 'en' ? 'Confirm batch move to Trash' : '确认批量移入已删除') : L('确认移入已删除');
     return `<article class="mcp-approval-card"><div class="mcp-approval-head"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(item.accountLabel || item.accountEmail || '')}${date?` · ${escapeHtml(date)}`:''}</small></div>${details}<div class="mcp-approval-actions"><button class="button button-primary" type="button" data-mcp-approval-action="approve" data-approval-id="${escapeHtml(item.id)}">${approveLabel}</button><button class="button button-quiet" type="button" data-mcp-approval-action="deny" data-approval-id="${escapeHtml(item.id)}">${L('拒绝')}</button></div></article>`;
   }).join('');
+  // 重渲染后同步"一键全部确认"按钮的可见性与初始文案
+  const approveAll = $('#mcpApproveAll');
+  if (approveAll) {
+    const deletions = list.filter((item) => item.kind === 'manage_email');
+    approveAll.classList.toggle('hidden', !deletions.length);
+    approveAll.dataset.defaultLabel = deletions.length
+      ? (I18N_LANG === 'en' ? `Confirm all ${deletions.length}` : `全部确认（${deletions.length}）`)
+      : '';
+    if (approveAll.dataset.armed !== '1') approveAll.textContent = approveAll.dataset.defaultLabel;
+  }
 }
 async function pollMcpApprovals() {
   if (mcpApprovalPollInFlight || $('#appView').classList.contains('hidden')) return;
@@ -1336,6 +1347,15 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden) void pollMcpApprovals();
 });
 window.addEventListener('focus', () => { void pollMcpApprovals(); });
+// MCP 审批卡的两段式确认：第一次点击让按钮进入"再次点击执行"状态（3 秒内有效），
+// 替代原先的 confirm 弹窗——逐封处理时不再被弹窗打断；发送邮件保留弹窗（内容敏感）。
+let mcpArmTimers = new Map();
+function disarmMcpApproval(button) {
+  const id = button.dataset.approvalId;
+  if (mcpArmTimers.has(id)) { clearTimeout(mcpArmTimers.get(id)); mcpArmTimers.delete(id); }
+  button.dataset.armed = '';
+  button.disabled = false;
+}
 $('#mcpApprovalList').addEventListener('click', async (event) => {
   const button = event.target.closest('[data-mcp-approval-action]');
   if (!button) return;
@@ -1346,15 +1366,22 @@ $('#mcpApprovalList').addEventListener('click', async (event) => {
   const approvalUids = Array.isArray(approval.uids) ? approval.uids.map(Number).filter((uid) => Number.isSafeInteger(uid) && uid > 0) : [Number(approval.uid)].filter((uid) => Number.isSafeInteger(uid) && uid > 0);
   const batch = !send && approvalUids.length > 1;
   if (button.dataset.mcpApprovalAction === 'approve') {
-    const copy = send
-      ? `${L('将从 ')}${approval.accountEmail || approval.accountLabel || L('所选邮箱')}${L(' 发送给 ')}${approval.to || L('未指定收件人')}。${L('主题：')}${approval.subject || L('(无主题)')}。\n\n${String(approval.text || '').slice(0,4000)}`
-      : (I18N_LANG === 'en'
-        ? `Move ${batch ? `${approvalUids.length} emails (UIDs ${approvalUids.join(', ')})` : `UID ${approvalUids[0] || ''}`} in ${approval.folder || 'INBOX'} of ${approval.accountEmail || approval.accountLabel || L('所选邮箱')} to Trash. This is not a permanent deletion.`
-        : `将把 ${approval.accountEmail || approval.accountLabel || '所选邮箱'} 中 ${approval.folder || 'INBOX'} 的 ${batch ? `${approvalUids.length} 封邮件（UID ${approvalUids.join('、')}）` : `邮件 UID ${approvalUids[0] || ''}`} 移入“已删除”。这不是永久删除。`);
-    const confirmTitle = send ? L('确认发送这封邮件？') : batch ? (I18N_LANG === 'en' ? 'Confirm batch move to Trash?' : '确认批量移入已删除？') : L('确认移入已删除？');
-    const confirmLabel = send ? L('确认并发送') : batch ? (I18N_LANG === 'en' ? 'Move batch to Trash' : '整批移入已删除') : L('移入已删除');
-    if (!await askConfirm(confirmTitle, copy, confirmLabel, true)) return;
+    if (send) {
+      // 发信保留确认弹窗：收件人/正文需仔细核对
+      const copy = `${L('将从 ')}${approval.accountEmail || approval.accountLabel || L('所选邮箱')}${L(' 发送给 ')}${approval.to || L('未指定收件人')}。${L('主题：')}${approval.subject || L('(无主题)')}。\n\n${String(approval.text || '').slice(0,4000)}`;
+      if (!await askConfirm(L('确认发送这封邮件？'), copy, L('确认并发送'), true)) return;
+    } else if (button.dataset.armed !== '1') {
+      // 删信两段式：第一次点击仅武装按钮，卡片文案即所见即所删，无需弹窗
+      button.dataset.armed = '1';
+      button.textContent = batch
+        ? (I18N_LANG === 'en' ? `Tap again: move ${approvalUids.length} to Trash` : `再点一次：整批移入已删除`)
+        : (I18N_LANG === 'en' ? 'Tap again: move to Trash' : '再点一次：移入已删除');
+      if (mcpArmTimers.has(id)) clearTimeout(mcpArmTimers.get(id));
+      mcpArmTimers.set(id, setTimeout(() => disarmMcpApproval(button), 3000));
+      return;
+    }
   }
+  disarmMcpApproval(button);
   button.disabled = true;
   try {
     if (button.dataset.mcpApprovalAction === 'approve') {
@@ -1366,6 +1393,37 @@ $('#mcpApprovalList').addEventListener('click', async (event) => {
     }
     await pollMcpApprovals();
   } catch (error) { toast(error.message, true); await pollMcpApprovals(); }
+});
+$('#mcpApproveAll').addEventListener('click', async (event) => {
+  // 一键全部确认：把当前所有删信审批合并为整批执行（单封与批量统一按 batch 接口语义逐个批准）
+  const button = event.currentTarget;
+  if (button.dataset.armed !== '1') {
+    const deletions = mcpApprovals.filter((item) => item.kind === 'manage_email');
+    if (!deletions.length) return;
+    button.dataset.armed = '1';
+    button.textContent = I18N_LANG === 'en' ? `Tap again: confirm all ${deletions.length}` : `再点一次：确认全部 ${deletions.length} 项`;
+    if (mcpApproveAllTimer) clearTimeout(mcpApproveAllTimer);
+    mcpApproveAllTimer = setTimeout(() => { button.dataset.armed = ''; button.textContent = button.dataset.defaultLabel; }, 3000);
+    return;
+  }
+  if (mcpApproveAllTimer) { clearTimeout(mcpApproveAllTimer); mcpApproveAllTimer = null; }
+  button.dataset.armed = '';
+  button.textContent = button.dataset.defaultLabel;
+  button.disabled = true;
+  try {
+    let moved = 0, failed = 0;
+    for (const item of mcpApprovals.filter((entry) => entry.kind === 'manage_email')) {
+      try {
+        const result = await api(`/api/mcp/approvals/${encodeURIComponent(item.id)}/approve`, { method:'POST', body:JSON.stringify({}) });
+        moved += Number(result.result?.count || (Array.isArray(item.uids) ? item.uids.length : 1));
+      } catch { failed += 1; }
+    }
+    toast(I18N_LANG === 'en'
+      ? (failed ? `${moved} moved to Trash, ${failed} failed.` : `${moved} emails moved to Trash.`)
+      : (failed ? `${moved} 封已移入已删除，${failed} 项处理失败。` : `${moved} 封邮件已移入已删除。`), Boolean(failed));
+    await pollMcpApprovals();
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
 });
 $('#reviewMcpApprovals').addEventListener('click', () => { void openSettings('mcp'); });
 $('#settingsDialog').addEventListener('close', clearMcpTokenReveal);

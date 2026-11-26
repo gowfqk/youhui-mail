@@ -674,4 +674,16 @@ window.YouhuiI18n = { en: {
 '全部标为已读': 'Mark all as read',
 '已将邮件全部标为已读。': 'All messages marked as read.',
 '星标视图不支持批量已读，请进入具体文件夹操作。': 'Bulk mark-as-read is not available in the starred view. Open a specific folder instead.',
+// ---- MCP 审批两段式确认 / 一键全部确认 ----
+'再点一次：移入已删除': 'Tap again: move to Trash',
+'再点一次：整批移入已删除': 'Tap again: move all to Trash',
+'Tap again: move to Trash': 'Tap again: move to Trash',
+'Tap again: move all to Trash': 'Tap again: move all to Trash',
+'全部确认': 'Confirm all',
+'再点一次：确认全部 ': 'Tap again: confirm all ',
+'Tap again: confirm all ': 'Tap again: confirm all ',
+'全部确认（': 'Confirm all (',
+'封已移入已删除，': ' moved to Trash, ',
+' 项处理失败。': ' failed.',
+'封邮件已移入已删除。': ' emails moved to Trash.',
 } };

@@ -4,6 +4,8 @@ import com.youhui.mail.data.remote.YouhuiApi
 import com.youhui.mail.data.remote.dto.ActionReq
 import com.youhui.mail.data.remote.dto.AccountsDto
 import com.youhui.mail.data.remote.dto.FoldersDto
+import com.youhui.mail.data.remote.dto.FolderReadAllDto
+import com.youhui.mail.data.remote.dto.FolderReadAllReq
 import com.youhui.mail.data.remote.dto.MailListDto
 import com.youhui.mail.data.remote.dto.MessageDto
 import com.youhui.mail.data.remote.dto.OkDto
@@ -24,6 +26,9 @@ class MailRepository(private val api: YouhuiApi) {
 
     suspend fun messageAction(accountId: String, uid: Long, folder: String, action: String): OkDto =
         api.action(accountId, uid, ActionReq(folder, action))
+
+    suspend fun markAllRead(folder: String, accountId: String): FolderReadAllDto =
+        api.markAllRead(FolderReadAllReq(folder = folder, accountId = accountId))
 
     suspend fun accounts(): AccountsDto = api.accounts()
 

@@ -56,6 +56,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
@@ -303,6 +304,32 @@ fun MessageDetailScreen(
             } else if (current != null) {
                 // 雷鸟风格卡片头部：主题 / 头像发件人 / 可折叠收件人 / 友好时间
                 MessageMeta(current)
+                val verificationCode = current.verificationCode?.takeIf { it.isNotBlank() }
+                if (verificationCode != null) {
+                    Card(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp)) {
+                        Row(
+                            Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    t("检测到验证码"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    verificationCode,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            TextButton(onClick = {
+                                clipboard.setText(AnnotatedString(verificationCode))
+                                scope.launch { snackbar.showSnackbar(t("验证码已复制")) }
+                            }) { Text(t("复制验证码")) }
+                        }
+                    }
+                }
                 HorizontalDivider(Modifier.padding(vertical = 4.dp))
                 // 正文区：两侧留白，长邮件不难读
                 MailBodyWebView(

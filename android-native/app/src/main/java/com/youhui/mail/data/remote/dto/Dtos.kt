@@ -75,7 +75,11 @@ data class MailItemDto(
     val date: JsonPrimitive? = null,
     val unread: Boolean = false,
     val flagged: Boolean = false,
-    val size: Long = 0
+    val size: Long = 0,
+    // 列表徽标 / 筛选元数据（服务端从 envelope 与 BODYSTRUCTURE 提取）
+    val verificationCode: String? = null,
+    val hasAttachments: Boolean = false,
+    val attachmentCount: Int = 0
 )
 
 @Serializable
@@ -116,6 +120,7 @@ data class MessageDto(
     val messageId: String? = null,
     val inReplyTo: String? = null,
     val references: String? = null,
+    val verificationCode: String? = null,
     val attachments: List<AttachmentMetaDto> = emptyList()
 )
 
@@ -123,6 +128,19 @@ data class MessageDto(
 data class ActionReq(
     val folder: String,
     val action: String
+)
+
+@Serializable
+data class FolderReadAllReq(
+    val folder: String,
+    val accountId: String = "all"
+)
+
+@Serializable
+data class FolderReadAllDto(
+    val ok: Boolean = true,
+    val updated: Int = 0,
+    val errors: List<Map<String, String>> = emptyList()
 )
 
 @Serializable

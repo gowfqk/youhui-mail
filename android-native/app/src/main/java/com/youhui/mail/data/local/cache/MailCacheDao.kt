@@ -39,6 +39,10 @@ interface MailCacheDao {
     @Query("UPDATE cached_mail_items SET unread = :unread WHERE accountId = :accountId AND uid = :uid AND folder = :folder")
     suspend fun updateRead(accountId: String, uid: Long, folder: String, unread: Boolean)
 
+    /** 整个文件夹标为已读（accountId 为 all 时覆盖该文件夹内所有账户）。 */
+    @Query("UPDATE cached_mail_items SET unread = 0 WHERE folder = :folder AND (:accountId = 'all' OR accountId = :accountId)")
+    suspend fun markFolderRead(folder: String, accountId: String)
+
     @Query("UPDATE cached_mail_items SET flagged = :flagged WHERE accountId = :accountId AND uid = :uid AND folder = :folder")
     suspend fun updateFlagged(accountId: String, uid: Long, folder: String, flagged: Boolean)
 

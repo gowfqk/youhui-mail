@@ -33,6 +33,9 @@ class MailCacheRepository(private val dao: MailCacheDao) {
     suspend fun markRead(accountId: String, uid: Long, folder: String, unread: Boolean) =
         dao.updateRead(accountId, uid, folder, unread)
 
+    suspend fun markFolderRead(folder: String, accountId: String) =
+        dao.markFolderRead(folder, accountId)
+
     suspend fun markFlagged(accountId: String, uid: Long, folder: String, flagged: Boolean) =
         dao.updateFlagged(accountId, uid, folder, flagged)
 

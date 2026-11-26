@@ -36,9 +36,11 @@ data class InboxUiState(
     val folder: String = "INBOX",
     val accountId: String = "all",
     val query: String = "",
+    val listFilter: String = "all", // all / unread / verification / attachments（仅筛选当前已加载列表）
     val accounts: List<Pair<String, String>> = emptyList(), // id → 展示名
     val folders: List<Pair<String, String>> = listOf("INBOX" to "收件箱"), // path → 显示名
     val error: String? = null,
+    val notice: String? = null,
     val endReached: Boolean = false,
     val fromCache: Boolean = false                    // 当前列表来自离线缓存（无网络/失败时）
 )
@@ -141,6 +143,36 @@ class InboxViewModel(
         refresh()
     }
 
+    fun setListFilter(filter: String) {
+        _state.value = _state.value.copy(listFilter = filter)
+    }
+
+    /** 当前文件夹整体标为已读；星标聚合视图没有单一 IMAP 文件夹，需在具体文件夹操作。 */
+    fun markAllRead() {
+        val current = _state.value
+        if (current.folder == "Starred") {
+            _state.value = current.copy(error = "星标视图不支持批量已读")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val result = repository.markAllRead(current.folder, current.accountId)
+                if (result.errors.isNotEmpty()) {
+                    _state.value = _state.value.copy(error = result.errors.joinToString(" · ") { it["error"].orEmpty() })
+                    return@launch
+                }
+                val updated = _state.value.messages.map { if (it.unread) it.copy(unread = false) else it }
+                _state.value = _state.value.copy(
+                    messages = updated,
+                    notice = if (result.updated > 0) "已将邮件全部标为已读" else "当前没有未读邮件"
+                )
+                cache?.markFolderRead(current.folder, current.accountId)
+            } catch (e: Exception) {
+                _state.value = _state.value.copy(error = e.toUserMessage())
+            }
+        }
+    }
+
     fun performAction(item: MailItemDto, action: String) {
         viewModelScope.launch {
             try {
@@ -174,6 +206,10 @@ class InboxViewModel(
 
     fun clearError() {
         _state.value = _state.value.copy(error = null)
+    }
+
+    fun clearNotice() {
+        _state.value = _state.value.copy(notice = null)
     }
 
     class Factory(

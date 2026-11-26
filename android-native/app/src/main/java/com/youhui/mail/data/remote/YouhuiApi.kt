@@ -15,6 +15,8 @@ import com.youhui.mail.data.remote.dto.DefaultAccountReq
 import com.youhui.mail.data.remote.dto.EventsDto
 import com.youhui.mail.data.remote.dto.ExchangeReq
 import com.youhui.mail.data.remote.dto.FoldersDto
+import com.youhui.mail.data.remote.dto.FolderReadAllDto
+import com.youhui.mail.data.remote.dto.FolderReadAllReq
 import com.youhui.mail.data.remote.dto.MailListDto
 import com.youhui.mail.data.remote.dto.McpApproveDto
 import com.youhui.mail.data.remote.dto.McpApprovalsDto
@@ -101,6 +103,10 @@ interface YouhuiApi {
         @Path("uid") uid: Long,
         @Body body: ActionReq
     ): OkDto
+
+    // 整个文件夹批量标为已读（服务端按 UID 搜索 UNSEEN 后分块 STORE）
+    @POST("api/folder/read-all")
+    suspend fun markAllRead(@Body body: FolderReadAllReq): FolderReadAllDto
 
     @POST("api/send")
     suspend fun send(@Body body: SendReq): OkDto

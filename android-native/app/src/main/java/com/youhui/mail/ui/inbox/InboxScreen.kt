@@ -22,12 +22,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MarkEmailRead
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -42,6 +44,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -81,6 +84,16 @@ fun InboxScreen(
     val state by viewModel.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+    var showMarkAllDialog by remember { mutableStateOf(false) }
+    // 状态筛选只作用于当前已加载列表；翻页仍按服务端游标继续
+    val visibleMessages = remember(state.messages, state.listFilter) {
+        when (state.listFilter) {
+            "unread" -> state.messages.filter { it.unread }
+            "verification" -> state.messages.filter { !it.verificationCode.isNullOrBlank() }
+            "attachments" -> state.messages.filter { it.hasAttachments || it.attachmentCount > 0 }
+            else -> state.messages
+        }
+    }
 
     // 滚动到底自动加载下一页
     val nearEnd by remember {
@@ -99,12 +112,22 @@ fun InboxScreen(
         }
     }
 
+    LaunchedEffect(state.notice) {
+        state.notice?.let {
+            snackbar.showSnackbar(t(it))
+            viewModel.clearNotice()
+        }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             TopAppBar(
                 title = { Text("${t("邮汇 · ")}${state.folders.firstOrNull { it.first == state.folder }?.second ?: state.folder}") },
                 actions = {
+                    IconButton(onClick = { showMarkAllDialog = true }, enabled = state.folder != "Starred") {
+                        Icon(Icons.Filled.MarkEmailRead, contentDescription = t("全部标为已读"))
+                    }
                     IconButton(onClick = onOpenAi) {
                         Icon(Icons.Filled.AutoAwesome, contentDescription = t("AI 助手"))
                     }
@@ -130,9 +153,11 @@ fun InboxScreen(
                 folders = state.folders,
                 selectedAccount = state.accountId,
                 selectedFolder = state.folder,
+                listFilter = state.listFilter,
                 query = state.query,
                 onAccount = viewModel::setAccount,
                 onFolder = viewModel::setFolder,
+                onListFilter = viewModel::setListFilter,
                 onQuery = viewModel::setQuery
             )
             if (state.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -154,9 +179,13 @@ fun InboxScreen(
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(if (state.error == null) t("暂无邮件") else state.error ?: "", style = MaterialTheme.typography.bodyLarge)
                     }
+                } else if (visibleMessages.isEmpty() && !state.loading) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(t("没有符合筛选条件的邮件"), style = MaterialTheme.typography.bodyMedium)
+                    }
                 } else {
                     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                        items(state.messages, key = { Triple(it.accountId, it.folder ?: "", it.uid) }) { item ->
+                        items(visibleMessages, key = { Triple(it.accountId, it.folder ?: "", it.uid) }) { item ->
                             val dismissState = rememberSwipeToDismissBoxState(
                                 confirmValueChange = { value ->
                                     when (value) {
@@ -214,6 +243,22 @@ fun InboxScreen(
             }
         }
     }
+if (showMarkAllDialog) {
+        AlertDialog(
+            onDismissRequest = { showMarkAllDialog = false },
+            title = { Text(t("全部标为已读")) },
+            text = { Text(t("将当前文件夹的未读邮件全部标为已读？")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showMarkAllDialog = false
+                    viewModel.markAllRead()
+                }) { Text(t("确认")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMarkAllDialog = false }) { Text(t("取消")) }
+            }
+        )
+    }
 }
 
 @Composable
@@ -222,9 +267,11 @@ private fun FilterBar(
     folders: List<Pair<String, String>>,
     selectedAccount: String,
     selectedFolder: String,
+    listFilter: String,
     query: String,
     onAccount: (String) -> Unit,
     onFolder: (String) -> Unit,
+    onListFilter: (String) -> Unit,
     onQuery: (String) -> Unit
 ) {
     var accountMenu by remember { mutableStateOf(false) }
@@ -240,6 +287,28 @@ private fun FilterBar(
                         DropdownMenuItem(text = { Text(label) }, onClick = { accountMenu = false; onAccount(id) })
                     }
                 }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        // 状态筛选（当前已加载列表）：全部 / 未读 / 验证码 / 含附件
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            items(
+                listOf(
+                    "all" to t("全部"),
+                    "unread" to t("未读"),
+                    "verification" to t("验证码"),
+                    "attachments" to t("含附件")
+                ),
+                key = { it.first }
+            ) { (key, label) ->
+                FilterChip(
+                    selected = key == listFilter,
+                    onClick = { onListFilter(key) },
+                    label = { Text(label) }
+                )
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -307,13 +376,30 @@ private fun MailRow(item: MailItemDto, onClick: () -> Unit, onToggleStar: () -> 
                         modifier = Modifier.padding(start = 8.dp, top = 2.dp)
                     )
                 }
-                Text(
-                    item.subject ?: t("(无主题)"),
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = if (item.unread) FontWeight.Medium else FontWeight.Normal,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        item.subject ?: t("(无主题)"),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = if (item.unread) FontWeight.Medium else FontWeight.Normal,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (!item.verificationCode.isNullOrBlank()) {
+                        Spacer(Modifier.width(6.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = MaterialTheme.shapes.small
+                        ) {
+                            Text(
+                                "OTP ${item.verificationCode}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                            )
+                        }
+                    }
+                }
             }
             IconButton(onClick = onToggleStar) {
                 Icon(

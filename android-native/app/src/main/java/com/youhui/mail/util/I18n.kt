@@ -303,6 +303,20 @@ object I18n {
         "正文" to "Body",
         "添加附件" to "Add attachment",
         "邮件已发送。" to "Message sent.",
+        // ---- 列表筛选 / 验证码 / 全部已读 ----
+        "全部" to "All",
+        "未读" to "Unread",
+        "验证码" to "Codes",
+        "含附件" to "Attachments",
+        "全部标为已读" to "Mark all as read",
+        "将当前文件夹的未读邮件全部标为已读？" to "Mark all unread messages in this folder as read?",
+        "已将邮件全部标为已读" to "All messages marked as read",
+        "当前没有未读邮件" to "No unread messages",
+        "星标视图不支持批量已读" to "Bulk mark-as-read is not available in the starred view",
+        "检测到验证码" to "Verification code detected",
+        "复制验证码" to "Copy code",
+        "验证码已复制" to "Code copied",
+        "没有符合筛选条件的邮件" to "No messages match this filter",
     )
 }
 

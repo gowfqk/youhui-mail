@@ -670,4 +670,8 @@ window.YouhuiI18n = { en: {
 '邮件主题': 'Subject',
 '写下你想说的话…': 'Write your message…',
 '移除附件': 'Remove attachment',
+// ---- 全部标为已读 ----
+'全部标为已读': 'Mark all as read',
+'已将邮件全部标为已读。': 'All messages marked as read.',
+'星标视图不支持批量已读，请进入具体文件夹操作。': 'Bulk mark-as-read is not available in the starred view. Open a specific folder instead.',
 } };

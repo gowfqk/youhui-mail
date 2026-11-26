@@ -921,6 +921,24 @@ async function mutateMessage(account, folder, uid, action) {
     } finally { lock.release(); }
   });
 }
+// 整个文件夹标为已读：按 UID 搜索 UNSEEN 后分块 STORE，避免一次性下发超长命令。
+async function markFolderRead(account, folderKey) {
+  return withImapClient(account, async (client) => {
+    const mailboxes = await listMailboxes(account);
+    const knownKeys = ['INBOX', 'Sent', 'Drafts', 'Archive', 'Trash', 'Spam'];
+    const pathName = knownKeys.includes(folderKey) ? findFolder(mailboxes, folderKey) : folderKey;
+    if (!pathName) return 0;
+    const lock = await client.getMailboxLock(pathName);
+    try {
+      const uids = await client.search({ seen: false }, { uid: true });
+      if (!Array.isArray(uids) || !uids.length) return 0;
+      for (let index = 0; index < uids.length; index += 500) {
+        await client.messageFlagsAdd(uids.slice(index, index + 500).join(','), ['\\Seen'], { uid: true });
+      }
+      return uids.length;
+    } finally { lock.release(); }
+  });
+}
 function getStatus(req) {
   const setupRequired = !db.prepare('SELECT id FROM app_config WHERE id = 1').get();
   const token = cookieValue(req, 'youhui_session');
@@ -1995,6 +2013,23 @@ app.get('/api/folders', auth, async (req, res) => {
       } catch { return []; }
     }));
     res.json({ folders: rows.flat() });
+  } catch (error) { res.status(500).json({ error: safeError(error) }); }
+});
+app.post('/api/folder/read-all', auth, async (req, res) => {
+  try {
+    const folder = String(req.body?.folder || 'INBOX').slice(0, 200);
+    const accountFilter = String(req.body?.accountId || 'all');
+    if (folder === 'Starred') return res.status(400).json({ error: '星标视图不支持批量已读，请进入具体文件夹操作。' });
+    let accounts = db.prepare('SELECT * FROM accounts ORDER BY created_at').all().map(mapAccount);
+    if (accountFilter !== 'all') accounts = accounts.filter((account) => account.id === accountFilter);
+    if (!accounts.length) return res.status(404).json({ error: '找不到此邮箱账户。' });
+    let updated = 0;
+    const errors = [];
+    for (const account of accounts) {
+      try { updated += await markFolderRead(account, folder); }
+      catch (error) { errors.push({ accountId: account.id, error: safeError(error) }); }
+    }
+    res.json({ ok: true, updated, errors });
   } catch (error) { res.status(500).json({ error: safeError(error) }); }
 });
 app.get('/api/mail', auth, async (req, res) => {

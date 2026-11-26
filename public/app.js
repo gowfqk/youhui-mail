@@ -1106,6 +1106,19 @@ $('#searchInput').addEventListener('input',event=>{clearTimeout(state.searchTime
 $('#searchInput').addEventListener('keydown',event=>{if(event.key==='Enter'){clearTimeout(state.searchTimer);state.query=event.target.value.trim();state.cursor=null;state.cursorStack.length=0;loadMessages();}});
 $('#sortButton').addEventListener('click',()=>{state.olderFirst=!state.olderFirst;renderMessages();});
 $('#threadButton').addEventListener('click',()=>{state.threadView=!state.threadView;state.selected=null;state.detail=null;renderMessageListData({messages:state.threadView?[]:state.messages,total:state.total,hasMore:state.hasMore}, 'local');loadMessages();});
+$('#markAllReadButton').addEventListener('click',async()=>{
+  if (state.folder === 'Starred') return toast(L('星标视图不支持批量已读，请进入具体文件夹操作。'), true);
+  const button = $('#markAllReadButton');
+  if (button.disabled) return;
+  button.disabled = true;
+  try {
+    const result = await api('/api/folder/read-all', { method:'POST', body:JSON.stringify({ folder:state.folder, accountId:state.accountId }) });
+    if (result.errors?.length) toast(result.errors.map((item) => item.error).join(' · '), true);
+    else toast(L('已将邮件全部标为已读。'));
+    await loadMessages();
+  } catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+});
 $('#prevPage').addEventListener('click',()=>{if(state.cursorStack.length){state.cursor=state.cursorStack.pop();state.selected=null;loadMessages();}});
 $('#nextPage').addEventListener('click',()=>{if(state.hasMore){state.cursorStack.push(state.cursor);const next={...(state.cursor||{})};for(const message of state.messages){const uid=Number(message.uid);if(!uid)continue;const known=next[message.accountId];if(known===undefined||uid<known)next[message.accountId]=uid;}state.cursor=next;state.selected=null;loadMessages();}});
 $('#logoutButton').addEventListener('click',async()=>{try{await api('/api/logout',{method:'POST'});}catch{}state.accounts=[];state.selected=null;state.detail=null;state.aiConfig=null;state.translationConfig=null;state.aiMessages=[];state.aiContext=null;state.status={...(state.status||{}),authenticated:false};closeAIChat(false);showAuth();toast('工作台已锁定。');});

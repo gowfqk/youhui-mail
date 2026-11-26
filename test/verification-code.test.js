@@ -39,3 +39,20 @@ test('超长输入截断后仍然安全', () => {
   const result = extractVerificationCode(truncated);
   assert.ok(result === null || /^\d{4,8}$/.test(result));
 });
+
+test('主题中数字在前的形态也可提取', () => {
+  assert.equal(extractVerificationCode('G-123456 is your Google verification code'), '123456');
+  assert.equal(extractVerificationCode('123456 is your login code'), '123456');
+  assert.equal(extractVerificationCode('884212 - Your WhatsApp code'), '884212');
+  assert.equal(extractVerificationCode('654321，登录验证码'), '654321');
+  assert.equal(extractVerificationCode('2468 is your workspace sign in code'), '2468');
+  assert.equal(extractVerificationCode('Your code is 556677'), '556677');
+  assert.equal(extractVerificationCode('Your WhatsApp code is 889900'), '889900');
+});
+
+test('主题式提取不会误判订单/金额等数字', () => {
+  assert.equal(extractVerificationCode('您的订单 483921 已发货'), null);
+  assert.equal(extractVerificationCode('订单 483921 已发货，请查收 your code'), null);
+  assert.equal(extractVerificationCode('483921'), null); // 纯数字无提示词
+  assert.equal(extractVerificationCode('Invoice 483921 issued today'), null);
+});
